@@ -1,0 +1,43 @@
+[project]
+name = "nolas"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "imapclient>=3.0.1",
+    "requests>=2.32.4",
+    "asyncpg>=0.29.0",
+    "aioimaplib>=2.0.1",
+    "aiohttp>=3.9.5",
+    "pydantic-settings>=2.10.1",
+    "python-json-logger>=3.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.4.0",
+    "mypy>=1.10.0",
+    "ruff>=0.4.0",
+]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["pydantic.mypy"]
+strict = true
+ignore_missing_imports = true
+disallow_untyped_decorators = false
+disallow_untyped_calls = false
+disallow_subclassing_any = false
+implicit_reexport = false
+warn_unused_ignores = false
+exclude = "(.venv)/$"
+
+
+[tool.black]
+line-length = 120
+
+[tool.ruff]
+line-length = 120
