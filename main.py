@@ -28,7 +28,10 @@ import sys
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
-from database import DatabaseManager  # noqa: E402
+from app.database import db_manager, get_db_session  # noqa: E402
+from app.models import Account  # noqa: E402
+from app.repos.account import AccountRepo  # noqa: E402
+from lib.imap.models import AccountConfig  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from models import WorkerConfig  # noqa: E402
 from workers.cluster_manager import IMAPClusterManager  # noqa: E402
@@ -37,6 +40,17 @@ from workers.imap.imap_worker import start_worker  # noqa: E402
 setup_logging()
 
 logger = logging.getLogger(__name__)
+
+
+def convert_account_model_to_config(account: Account) -> AccountConfig:
+    """Convert SQLAlchemy Account model to AccountConfig dataclass."""
+    return AccountConfig(
+        email=account.email,
+        username=account.username,
+        password=account.password_encrypted,  # TODO: Implement decryption
+        provider=account.provider,
+        webhook_url=account.webhook_url,
+    )
 
 
 async def run_cluster_mode(num_workers: int | None = None) -> None:
@@ -81,30 +95,37 @@ async def run_single_worker_mode() -> None:
     """Run in single worker mode (for development/testing)."""
     logger.info("Starting in single worker mode")
 
-    # Load accounts from database
-    db_manager = DatabaseManager()
-    await db_manager.init_pool()
+    # Initialize database
+    db_manager.init_db()
 
     try:
-        accounts = await db_manager.get_active_accounts()
-        if not accounts:
-            logger.warning("No active accounts found. Run with --migrate first.")
-            return
+        # Load accounts from database
+        async for session in get_db_session():
+            account_repo = AccountRepo(session)
+            accounts_models = await account_repo.get_all_active()
 
-        # Create single worker config
-        config = WorkerConfig(worker_id=0, accounts=accounts)
+            if not accounts_models:
+                logger.warning("No active accounts found. Run with --migrate first.")
+                return
 
-        # Run worker
-        await start_worker(config)
+            # Convert to AccountConfig
+            accounts = [convert_account_model_to_config(acc) for acc in accounts_models]
+
+            # Create single worker config
+            config = WorkerConfig(worker_id=0, accounts=accounts)
+
+            # Run worker
+            await start_worker(config)
+            break
 
     finally:
-        await db_manager.close_pool()
+        await db_manager.close()
 
 
 async def add_test_account() -> None:
     """Add a test account to the database."""
-    db_manager = DatabaseManager()
-    await db_manager.init_pool()
+    # Initialize database
+    db_manager.init_db()
 
     try:
         try:
@@ -113,34 +134,50 @@ async def add_test_account() -> None:
             logger.error("test_accounts.py not found")
             return
 
-        for account in test_accounts:
-            await db_manager.add_account(account)
-            logger.info(f"Added test account: {account.email}")
+        async for session in get_db_session():
+            account_repo = AccountRepo(session)
+
+            for account in test_accounts:
+                account_data = {
+                    "email": account.email,
+                    "username": account.username,
+                    "password_encrypted": account.password,
+                    "provider": account.provider,
+                    "webhook_url": account.webhook_url,
+                    "is_active": True,
+                }
+                await account_repo.create(account_data)
+                await session.commit()
+                logger.info(f"Added test account: {account.email}")
+            break
 
     finally:
-        await db_manager.close_pool()
+        await db_manager.close()
 
 
 async def list_accounts() -> None:
     """List all accounts in the database."""
-    db_manager = DatabaseManager()
-    await db_manager.init_pool()
+    # Initialize database
+    db_manager.init_db()
 
     try:
-        accounts = await db_manager.get_active_accounts()
+        async for session in get_db_session():
+            account_repo = AccountRepo(session)
+            accounts = await account_repo.get_all_active()
 
-        if not accounts:
-            print("No accounts found in database.")
-            return
+            if not accounts:
+                print("No accounts found in database.")
+                return
 
-        print(f"\nFound {len(accounts)} accounts:")
-        print("-" * 80)
-        for i, account in enumerate(accounts, 1):
-            print(f"{i:2d}. {account.email:30} {account.provider:15} {account.webhook_url}")
-        print("-" * 80)
+            print(f"\nFound {len(accounts)} accounts:")
+            print("-" * 80)
+            for i, account in enumerate(accounts, 1):
+                print(f"{i:2d}. {account.email:30} {account.provider:15} {account.webhook_url}")
+            print("-" * 80)
+            break
 
     finally:
-        await db_manager.close_pool()
+        await db_manager.close()
 
 
 def main() -> None:

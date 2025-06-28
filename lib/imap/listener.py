@@ -4,7 +4,9 @@ import time
 
 from aioimaplib import IMAP4_SSL, Response
 
-from database import DatabaseManager
+from app.database import get_db_session
+from app.repos.connection_health import ConnectionHealthRepo
+from app.repos.uid_tracking import UidTrackingRepo
 from lib.email_processor import EmailProcessor
 from lib.imap.connection import ConnectionManager
 from models import AccountConfig
@@ -16,12 +18,11 @@ logger = logging.getLogger(__name__)
 class IMAPListener:
     """Async IMAP listener that monitors folders for new emails."""
 
-    def __init__(self, db_manager: DatabaseManager, email_processor: EmailProcessor):
-        self.db_manager = db_manager
-        self.email_processor = email_processor
-        self.connection_manager = ConnectionManager()
-        self.active_listeners: dict[str, asyncio.Task[None]] = {}  # account:folder -> task
-        self.shutdown_event = asyncio.Event()
+    def __init__(self, email_processor: EmailProcessor):
+        self._email_processor = email_processor
+        self._connection_manager = ConnectionManager()
+        self._active_listeners: dict[str, asyncio.Task[None]] = {}  # account:folder -> task
+        self._shutdown_event = asyncio.Event()
         self._listener_lock = asyncio.Lock()
 
     async def start_account_listener(self, account: AccountConfig) -> list[asyncio.Task[None]]:
@@ -36,7 +37,11 @@ class IMAPListener:
 
                 listener_key = f"{account.email}:{folder}"
                 async with self._listener_lock:
-                    self.active_listeners[listener_key] = task
+                    if listener_key in self._active_listeners:
+                        logger.warning(f"Listener already active for {listener_key}")
+                        continue
+
+                    self._active_listeners[listener_key] = task
 
                 tasks.append(task)
                 logger.info(f"Started listener for {account.email}:{folder}")
@@ -45,13 +50,86 @@ class IMAPListener:
 
         except Exception as e:
             logger.error(f"Failed to start account listener for {account.email}: {e}")
-            await self.db_manager.record_connection_health(account.email, "ALL", False, str(e))
+            await self._record_connection_health(account.email, "ALL", False, str(e))
             return []
+
+    async def stop_listener(self, account_email: str, folder: str) -> None:
+        """Stop a specific listener."""
+        listener_key = f"{account_email}:{folder}"
+
+        async with self._listener_lock:
+            task = self._active_listeners.get(listener_key)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+                self._active_listeners.pop(listener_key, None)
+                logger.info(f"Stopped listener for {account_email}:{folder}")
+
+    async def stop_account_listeners(self, account_email: str) -> None:
+        """Stop all listeners for an account."""
+        tasks_to_cancel: list[asyncio.Task[None]] = []
+
+        async with self._listener_lock:
+            for listener_key in list(self._active_listeners.keys()):
+                if listener_key.startswith(f"{account_email}:"):
+                    task = self._active_listeners.pop(listener_key)
+                    if not task.done():
+                        tasks_to_cancel.append(task)
+
+        # Cancel tasks
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        # Wait for cancellation
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        logger.info(f"Stopped all listeners for {account_email}")
+
+    async def stop_all_listeners(self) -> None:
+        """Stop all active listeners."""
+        self._shutdown_event.set()
+
+        tasks_to_cancel = []
+        async with self._listener_lock:
+            for task in self._active_listeners.values():
+                if not task.done():
+                    tasks_to_cancel.append(task)
+            self._active_listeners.clear()
+
+        # Cancel all tasks
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        # Wait for cancellation
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        # Close all connections
+        await self._connection_manager.close_all_connections()
+
+        logger.info("Stopped all IMAP listeners")
+
+    async def get_listener_stats(self) -> dict[str, int]:
+        """Get statistics about active listeners."""
+        async with self._listener_lock:
+            total_listeners = len(self._active_listeners)
+            active_listeners = sum(1 for task in self._active_listeners.values() if not task.done())
+
+            return {
+                "total_listeners": total_listeners,
+                "active_listeners": active_listeners,
+                "failed_listeners": total_listeners - active_listeners,
+            }
 
     async def _get_account_folders(self, account: AccountConfig) -> list[str]:
         """Get list of folders for an account."""
         try:
-            connection = await self.connection_manager.get_connection(account)
+            connection = await self._connection_manager.get_connection(account)
 
             response = await connection.list('""', "*")
             folders = []
@@ -71,7 +149,7 @@ class IMAPListener:
                             continue
                         folders.append(folder_name)
 
-            await self.connection_manager.release_connection(connection, account.email)
+            await self._connection_manager.release_connection(connection, account.email)
 
             # Limit folders per account to prevent resource exhaustion
             if len(folders) > 15:
@@ -91,13 +169,13 @@ class IMAPListener:
         consecutive_failures = 0
         max_failures = 5
 
-        while not self.shutdown_event.is_set():
+        while not self._shutdown_event.is_set():
             try:
                 # Get connection for this folder
-                connection = await self.connection_manager.get_connection(account, folder)
+                connection = await self._connection_manager.get_connection(account, folder)
 
                 # Initialize UID tracking
-                last_seen_uid = await self.db_manager.get_last_seen_uid(account.email, folder)
+                last_seen_uid = await self._get_last_seen_uid(account.email, folder)
 
                 status_response = await connection.status(folder, "(UIDNEXT)")
                 # Parse UIDNEXT from response
@@ -112,7 +190,7 @@ class IMAPListener:
                     await self._process_new_messages(connection, account, folder, last_seen_uid)
 
                 # Record successful connection
-                await self.db_manager.record_connection_health(account.email, folder, True)
+                await self._record_connection_health(account.email, folder, True)
                 consecutive_failures = 0
 
                 # Start IDLE monitoring
@@ -131,12 +209,12 @@ class IMAPListener:
                 )
 
                 # Record connection health
-                await self.db_manager.record_connection_health(account.email, folder, False, error_msg)
+                await self._record_connection_health(account.email, folder, False, error_msg)
 
                 # Close problematic connection
                 if connection:
                     try:
-                        await self.connection_manager.close_connection(connection, account.email)
+                        await self._connection_manager.close_connection(connection, account.email)
                     except Exception:
                         pass
                     connection = None
@@ -152,16 +230,53 @@ class IMAPListener:
             finally:
                 if connection:
                     try:
-                        await self.connection_manager.release_connection(connection, account.email)
+                        await self._connection_manager.release_connection(connection, account.email)
                     except Exception:
                         pass
 
         # Clean up
         listener_key = f"{account.email}:{folder}"
         async with self._listener_lock:
-            self.active_listeners.pop(listener_key, None)
+            self._active_listeners.pop(listener_key, None)
 
         logger.info(f"Stopped listener for {account.email}:{folder}")
+
+    async def _get_last_seen_uid(self, account_email: str, folder: str) -> int:
+        """Get the last seen UID for an account/folder combination using repository."""
+        try:
+            async for session in get_db_session():
+                uid_repo = UidTrackingRepo(session)
+                return await uid_repo.get_last_seen_uid(account_email, folder)
+        except Exception as e:
+            logger.error(f"Failed to get last seen UID: {e}")
+        return 0
+
+    async def _update_last_seen_uid(self, account_email: str, folder: str, uid: int) -> None:
+        """Update the last seen UID for an account/folder combination using repository."""
+        try:
+            async for session in get_db_session():
+                uid_repo = UidTrackingRepo(session)
+                await uid_repo.update_last_seen_uid(account_email, folder, uid)
+                await session.commit()
+                break
+        except Exception as e:
+            logger.error(f"Failed to update last seen UID: {e}")
+
+    async def _record_connection_health(
+        self, account_email: str, folder: str, success: bool, error_message: str | None = None
+    ) -> None:
+        """Record connection health status using repository."""
+        try:
+            async for session in get_db_session():
+                health_repo = ConnectionHealthRepo(session)
+                if success:
+                    await health_repo.record_success(account_email, folder)
+                else:
+                    await health_repo.record_failure(account_email, folder, error_message or "Unknown error")
+                await session.commit()
+                break
+        except Exception as e:
+            logger.error(f"Failed to record connection health: {e}")
 
     def _parse_uidnext(self, status_response: Response) -> int | None:
         """Parse UIDNEXT from IMAP STATUS response."""
@@ -190,12 +305,12 @@ class IMAPListener:
         """Monitor folder using IMAP IDLE."""
         try:
             # Start IDLE
-            await self.connection_manager.start_idle(connection, account.email)
+            await self._connection_manager.start_idle(connection, account.email)
 
             idle_start_time = time.time()
             max_idle_time = settings.imap.idle_timeout
 
-            while not self.shutdown_event.is_set():
+            while not self._shutdown_event.is_set():
                 try:
                     # Wait for IDLE response with timeout
                     response = await asyncio.wait_for(
@@ -206,20 +321,20 @@ class IMAPListener:
                     # Check if it's an EXISTS response (new message)
                     if b"EXISTS" in response:
                         logger.info(f"New message detected in {account.email}:{folder}")
-                        await self.connection_manager.stop_idle(connection, account.email)
+                        await self._connection_manager.stop_idle(connection, account.email)
 
                         # Process new messages
-                        last_seen_uid = await self.db_manager.get_last_seen_uid(account.email, folder)
+                        last_seen_uid = await self._get_last_seen_uid(account.email, folder)
                         await self._process_new_messages(connection, account, folder, last_seen_uid)
 
                         # Restart IDLE
-                        await self.connection_manager.start_idle(connection, account.email)
+                        await self._connection_manager.start_idle(connection, account.email)
                         idle_start_time = time.time()
 
                     # Check if IDLE has been running too long (refresh connection)
                     if time.time() - idle_start_time > max_idle_time:
                         logger.info(f"Refreshing IDLE connection for {account.email}:{folder}")
-                        await self.connection_manager.stop_idle(connection, account.email)
+                        await self._connection_manager.stop_idle(connection, account.email)
                         break  # Exit IDLE loop to refresh connection
 
                 except asyncio.TimeoutError:
@@ -232,7 +347,7 @@ class IMAPListener:
 
         finally:
             try:
-                await self.connection_manager.stop_idle(connection, account.email)
+                await self._connection_manager.stop_idle(connection, account.email)
             except Exception:
                 pass
 
@@ -251,12 +366,10 @@ class IMAPListener:
                 messages = self._parse_fetch_response(fetch_response)
 
                 for uid, raw_message in messages.items():
-                    await self.email_processor.process_email(account, folder, uid, raw_message)
+                    await self._email_processor.process_email(account, folder, uid, raw_message)
 
                     # Update UID tracking
-                    # await self.db_manager.update_last_seen_uid(
-                    #     account.email, folder, uid
-                    # )
+                    await self._update_last_seen_uid(account.email, folder, uid)
 
             logger.info(f"Processed new messages for {account.email}:{folder}")
 
@@ -325,76 +438,3 @@ class IMAPListener:
         except Exception as e:
             logger.error(f"Failed to parse fetch response: {e}")
         return messages
-
-    async def stop_listener(self, account_email: str, folder: str) -> None:
-        """Stop a specific listener."""
-        listener_key = f"{account_email}:{folder}"
-
-        async with self._listener_lock:
-            task = self.active_listeners.get(listener_key)
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-                self.active_listeners.pop(listener_key, None)
-                logger.info(f"Stopped listener for {account_email}:{folder}")
-
-    async def stop_account_listeners(self, account_email: str) -> None:
-        """Stop all listeners for an account."""
-        tasks_to_cancel = []
-
-        async with self._listener_lock:
-            for listener_key in list(self.active_listeners.keys()):
-                if listener_key.startswith(f"{account_email}:"):
-                    task = self.active_listeners.pop(listener_key)
-                    if not task.done():
-                        tasks_to_cancel.append(task)
-
-        # Cancel tasks
-        for task in tasks_to_cancel:
-            task.cancel()
-
-        # Wait for cancellation
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-        logger.info(f"Stopped all listeners for {account_email}")
-
-    async def stop_all_listeners(self) -> None:
-        """Stop all active listeners."""
-        self.shutdown_event.set()
-
-        tasks_to_cancel = []
-        async with self._listener_lock:
-            for task in self.active_listeners.values():
-                if not task.done():
-                    tasks_to_cancel.append(task)
-            self.active_listeners.clear()
-
-        # Cancel all tasks
-        for task in tasks_to_cancel:
-            task.cancel()
-
-        # Wait for cancellation
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-        # Close all connections
-        await self.connection_manager.close_all_connections()
-
-        logger.info("Stopped all IMAP listeners")
-
-    async def get_listener_stats(self) -> dict[str, int]:
-        """Get statistics about active listeners."""
-        async with self._listener_lock:
-            total_listeners = len(self.active_listeners)
-            active_listeners = sum(1 for task in self.active_listeners.values() if not task.done())
-
-            return {
-                "total_listeners": total_listeners,
-                "active_listeners": active_listeners,
-                "failed_listeners": total_listeners - active_listeners,
-            }

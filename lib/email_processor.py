@@ -1,10 +1,12 @@
 import asyncio
 import email
 import logging
+from datetime import datetime
 
 import aiohttp
 
-from database import DatabaseManager
+from app.database import get_db_session
+from app.repos.webhook_log import WebhookLogRepo
 from models import AccountConfig, Config, EmailMessage
 
 logger = logging.getLogger(__name__)
@@ -13,26 +15,24 @@ logger = logging.getLogger(__name__)
 class EmailProcessor:
     """Processes new emails and sends webhooks with retry logic."""
 
-    def __init__(self, db_manager: DatabaseManager):
-        self.db_manager = db_manager
-        self.http_session: aiohttp.ClientSession | None = None
+    def __init__(self) -> None:
+        self._http_session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
 
     async def init_session(self) -> None:
         """Initialize HTTP session for webhook delivery."""
-        if self.http_session is None:
-            async with self._session_lock:
-                if self.http_session is None:
-                    timeout = aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
-                    self.http_session = aiohttp.ClientSession(
-                        timeout=timeout, headers={"Content-Type": "application/json"}
-                    )
+        async with self._session_lock:
+            if self._http_session is None:
+                timeout = aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
+                self._http_session = aiohttp.ClientSession(
+                    timeout=timeout, headers={"Content-Type": "application/json"}
+                )
 
     async def close_session(self) -> None:
         """Close HTTP session."""
-        if self.http_session:
-            await self.http_session.close()
-            self.http_session = None
+        if self._http_session:
+            await self._http_session.close()
+            self._http_session = None
 
     async def process_email(self, account: AccountConfig, folder: str, uid: int, raw_message: bytes) -> None:
         """Process a new email and send webhook."""
@@ -64,7 +64,7 @@ class EmailProcessor:
         """Send webhook with exponential backoff retry logic."""
         await self.init_session()
 
-        if not self.http_session:
+        if not self._http_session:
             logger.error("HTTP session not initialized")
             return False
 
@@ -82,11 +82,11 @@ class EmailProcessor:
 
         for attempt in range(1, max_retries + 1):
             try:
-                async with self.http_session.post(
+                async with self._http_session.post(
                     account.webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
                 ) as response:
                     # Log the attempt
-                    await self.db_manager.log_webhook_delivery(
+                    await self._log_webhook_delivery(
                         email_msg.account,
                         email_msg.folder,
                         email_msg.uid,
@@ -115,7 +115,7 @@ class EmailProcessor:
                 logger.warning(
                     f"Webhook timeout (attempt {attempt}) for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}"
                 )
-                await self.db_manager.log_webhook_delivery(
+                await self._log_webhook_delivery(
                     email_msg.account,
                     email_msg.folder,
                     email_msg.uid,
@@ -130,7 +130,7 @@ class EmailProcessor:
                 logger.warning(
                     f"Webhook error (attempt {attempt}) for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}: {e}"
                 )
-                await self.db_manager.log_webhook_delivery(
+                await self._log_webhook_delivery(
                     email_msg.account,
                     email_msg.folder,
                     email_msg.uid,
@@ -151,11 +151,41 @@ class EmailProcessor:
         )
         return False
 
+    async def _log_webhook_delivery(
+        self,
+        account_email: str,
+        folder: str,
+        uid: int,
+        webhook_url: str,
+        status_code: int | None = None,
+        response_body: str | None = None,
+        attempts: int = 1,
+        delivered: bool = False,
+    ) -> None:
+        """Log webhook delivery attempt using repository."""
+        try:
+            async for session in get_db_session():
+                webhook_repo = WebhookLogRepo(session)
+                await webhook_repo.create_log(
+                    account_email=account_email,
+                    folder=folder,
+                    uid=uid,
+                    webhook_url=webhook_url,
+                    status_code=status_code,
+                    response_body=response_body,
+                    attempts=attempts,
+                    delivered_at=datetime.utcnow() if delivered else None,
+                )
+                await session.commit()
+                break
+        except Exception as e:
+            logger.error(f"Failed to log webhook delivery: {e}")
+
     async def send_test_webhook(self, account: AccountConfig) -> bool:
         """Send a test webhook to verify connectivity."""
         await self.init_session()
 
-        if not self.http_session:
+        if not self._http_session:
             return False
 
         test_payload = {
@@ -166,7 +196,7 @@ class EmailProcessor:
         }
 
         try:
-            async with self.http_session.post(
+            async with self._http_session.post(
                 account.webhook_url, json=test_payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
             ) as response:
                 if response.status == 200:

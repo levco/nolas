@@ -26,53 +26,53 @@ class RateLimiter:
     """Token bucket rate limiter for IMAP connections."""
 
     def __init__(self, rate: float, burst: int | None = None):
-        self.rate = rate  # tokens per second
-        self.burst = burst or int(rate * 2)  # burst capacity
-        self.tokens = self.burst
-        self.last_update = time.time()
+        self._rate = rate  # tokens per second
+        self._burst = burst or int(rate * 2)  # burst capacity
+        self._tokens = self._burst
+        self._last_update = time.time()
         self._lock = asyncio.Lock()
 
     async def acquire(self, tokens: int = 1) -> None:
         """Acquire tokens from the bucket, waiting if necessary."""
         async with self._lock:
             now = time.time()
-            elapsed = now - self.last_update
+            elapsed = now - self._last_update
 
             # Add tokens based on elapsed time
-            self.tokens = min(self.burst, int(self.tokens + elapsed * self.rate))
-            self.last_update = now
+            self._tokens = min(self._burst, int(self._tokens + elapsed * self._rate))
+            self._last_update = now
 
-            if self.tokens >= tokens:
-                self.tokens -= tokens
+            if self._tokens >= tokens:
+                self._tokens -= tokens
                 return
 
             # Calculate wait time
-            wait_time = (tokens - self.tokens) / self.rate
+            wait_time = (tokens - self._tokens) / self._rate
             await asyncio.sleep(wait_time)
-            self.tokens = 0
+            self._tokens = 0
 
 
 class ConnectionManager:
     """Manages IMAP connections with pooling and rate limiting."""
 
     def __init__(self) -> None:
-        self.connections: dict[str, list[ConnectionInfo]] = {}  # provider -> connections
-        self.rate_limiters: dict[str, RateLimiter] = {}
-        self.connection_locks: dict[str, asyncio.Semaphore] = {}
+        self._connections: dict[str, list[ConnectionInfo]] = {}  # provider -> connections
+        self._rate_limiters: dict[str, RateLimiter] = {}
+        self._connection_locks: dict[str, asyncio.Semaphore] = {}
         self._lock = asyncio.Lock()
 
         # Initialize rate limiters and connection limits
         for provider in Config.IMAP_SERVERS.keys():
             limit = Config.CONNECTION_LIMITS.get(provider, 10)
-            self.connection_locks[provider] = asyncio.Semaphore(limit)
-            self.rate_limiters[provider] = RateLimiter(rate=Config.RATE_LIMIT_PER_PROVIDER, burst=limit)
+            self._connection_locks[provider] = asyncio.Semaphore(limit)
+            self._rate_limiters[provider] = RateLimiter(rate=Config.RATE_LIMIT_PER_PROVIDER, burst=limit)
 
     async def get_connection(self, account: AccountConfig, folder: str | None = None) -> IMAP4_SSL:
         """Get an IMAP connection for the account, reusing if possible."""
         provider = account.provider
 
         # Rate limiting
-        await self.rate_limiters[provider].acquire()
+        await self._rate_limiters[provider].acquire()
 
         # Try to reuse existing connection
         connection_info = await self._find_reusable_connection(account, folder)
@@ -80,7 +80,7 @@ class ConnectionManager:
             return connection_info.connection
 
         # Create new connection if under limit
-        async with self.connection_locks[provider]:
+        async with self._connection_locks[provider]:
             return await self._create_new_connection(account, folder)
 
     async def _find_reusable_connection(
@@ -89,11 +89,11 @@ class ConnectionManager:
         """Find a reusable connection for the account."""
         provider = account.provider
 
-        if provider not in self.connections:
+        if provider not in self._connections:
             return None
 
         async with self._lock:
-            for conn_info in self.connections[provider]:
+            for conn_info in self._connections[provider]:
                 if (
                     conn_info.account_email == account.email
                     and not conn_info.is_idle
@@ -108,7 +108,7 @@ class ConnectionManager:
                         return conn_info
                     else:
                         # Remove dead connection
-                        self.connections[provider].remove(conn_info)
+                        self._connections[provider].remove(conn_info)
 
         return None
 
@@ -136,9 +136,9 @@ class ConnectionManager:
             )
 
             async with self._lock:
-                if provider not in self.connections:
-                    self.connections[provider] = []
-                self.connections[provider].append(conn_info)
+                if provider not in self._connections:
+                    self._connections[provider] = []
+                self._connections[provider].append(conn_info)
 
             logger.info(f"Created new IMAP connection for {account.email}:{folder}")
             return connection
@@ -167,7 +167,7 @@ class ConnectionManager:
             return
 
         async with self._lock:
-            for conn_info in self.connections.get(provider, []):
+            for conn_info in self._connections.get(provider, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = True
                     break
@@ -181,7 +181,7 @@ class ConnectionManager:
             return
 
         async with self._lock:
-            for conn_info in self.connections.get(provider, []):
+            for conn_info in self._connections.get(provider, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = False
                     break
@@ -195,7 +195,7 @@ class ConnectionManager:
             return
 
         async with self._lock:
-            for conn_info in self.connections.get(provider, []):
+            for conn_info in self._connections.get(provider, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = False
                     conn_info.last_used = time.time()
@@ -208,9 +208,9 @@ class ConnectionManager:
             return
 
         async with self._lock:
-            for conn_info in self.connections.get(provider, []):
+            for conn_info in self._connections.get(provider, []):
                 if conn_info.connection == connection:
-                    self.connections[provider].remove(conn_info)
+                    self._connections[provider].remove(conn_info)
                     break
 
         try:
@@ -232,7 +232,7 @@ class ConnectionManager:
         connections_to_close = []
 
         async with self._lock:
-            for provider, conn_list in self.connections.items():
+            for provider, conn_list in self._connections.items():
                 for conn_info in conn_list[:]:  # Copy list to avoid modification during iteration
                     if current_time - conn_info.last_used > max_idle_time:
                         connections_to_close.append((conn_info.connection, conn_info.account_email))
@@ -251,7 +251,7 @@ class ConnectionManager:
         stats = {}
 
         async with self._lock:
-            for provider, conn_list in self.connections.items():
+            for provider, conn_list in self._connections.items():
                 stats[provider] = {
                     "total": len(conn_list),
                     "idle": sum(1 for conn in conn_list if conn.is_idle),
@@ -265,7 +265,7 @@ class ConnectionManager:
         connections_to_close = []
 
         async with self._lock:
-            for provider, conn_list in self.connections.items():
+            for provider, conn_list in self._connections.items():
                 for conn_info in conn_list:
                     connections_to_close.append((conn_info.connection, conn_info.account_email))
                 conn_list.clear()
