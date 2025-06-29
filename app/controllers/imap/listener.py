@@ -6,6 +6,7 @@ from aioimaplib import IMAP4_SSL, Response
 
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
+from app.controllers.imap.folder_utils import FolderUtils
 from app.controllers.imap.models import AccountConfig
 from app.repos.connection_health import ConnectionHealthRepo
 from app.repos.uid_tracking import UidTrackingRepo
@@ -38,8 +39,8 @@ class IMAPListener:
         await self._email_processor.init_session()
 
         try:
-            # Get list of folders
-            folders = await self._get_account_folders(account)
+            # Get list of folders using shared utility
+            folders = await FolderUtils.get_account_folders(self._connection_manager, account)
 
             tasks = []
             for folder in folders:
@@ -137,43 +138,6 @@ class IMAPListener:
                 "active_listeners": active_listeners,
                 "failed_listeners": total_listeners - active_listeners,
             }
-
-    async def _get_account_folders(self, account: AccountConfig) -> list[str]:
-        """Get list of folders for an account."""
-        try:
-            connection = await self._connection_manager.get_connection(account)
-
-            response = await connection.list('""', "*")
-            folders = []
-
-            # Parse LIST response
-            for line in response.lines:
-                # Skip the completion line
-                if b"LIST completed" in line:
-                    continue
-
-                # Parse folder from response like: b'(\\Archive) "." "Archive"'
-                if isinstance(line, bytes) and b'"' in line:
-                    parts = line.split(b'"')
-                    if len(parts) >= 3:
-                        folder_name = parts[-2].decode("utf-8")
-                        if folder_name.lower() != "sent":
-                            continue
-                        folders.append(folder_name)
-
-            await self._connection_manager.release_connection(connection, account)
-
-            # Limit folders per account to prevent resource exhaustion
-            if len(folders) > 15:
-                folders = folders[:15]
-                logger.warning(f"Limited {account.email} to first 15 folders")
-
-            logger.info(f"Found {len(folders)} folders for {account.email}: {folders}")
-            return folders
-
-        except Exception as e:
-            logger.exception(f"Failed to get folders for {account.email}: {e}")
-            return []
 
     async def _listen_to_folder(self, account: AccountConfig, folder: str) -> None:
         """Listen to a specific folder for new emails."""

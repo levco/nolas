@@ -1,7 +1,7 @@
 from typing import Any, cast
 
 from fastapi_async_sqlalchemy import db
-from sqlalchemy import ScalarResult, select
+from sqlalchemy import ScalarResult
 from sqlalchemy.orm import selectinload
 
 from app.models.account import Account, AccountStatus
@@ -14,10 +14,17 @@ class AccountRepo(BaseRepo[Account]):
     def __init__(self) -> None:
         super().__init__(Account)
 
+    async def get_by_app_and_uuid(self, app_id: int, uuid: str) -> Account | None:
+        """Get account by app and uuid."""
+        query = self.base_stmt.where(Account.app_id == app_id, Account.uuid == uuid)
+        result = await self.execute(query)
+        return result.one_or_none()
+
     async def get_by_email(self, email: str) -> Account | None:
         """Get account by email."""
-        result = await db.session.execute(select(Account).where(Account.email == email))
-        return cast(Account | None, result.scalar_one_or_none())
+        query = self.base_stmt.where(Account.email == email)
+        result = await self.execute(query)
+        return result.one_or_none()
 
     async def get_all_active(self) -> ScalarResult[Account]:
         """Get all active accounts."""

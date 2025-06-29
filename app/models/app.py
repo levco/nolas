@@ -10,4 +10,5 @@ class App(Base, WithUUID, TimestampMixin):
     __tablename__ = "apps"
 
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    api_key: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     webhook_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)

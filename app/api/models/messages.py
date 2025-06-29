@@ -49,6 +49,13 @@ class Message(BaseModel):
         populate_by_name = True
 
 
+class MessageResponse(BaseModel):
+    """Response model for getting a single message."""
+
+    request_id: str
+    data: Message
+
+
 class MessageListResponse(BaseModel):
     """Response model for listing messages."""
 

@@ -2,16 +2,22 @@
 Messages API router - Sub-router for message endpoints under grants.
 """
 
+import logging
 import time
+import uuid
 from typing import Any, Dict
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from app.api.models import Message, MessageListResponse
+from app.api.middlewares.authentication import get_current_app
+from app.api.models import Message, MessageListResponse, MessageResponse
 from app.container import ApplicationContainer
+from app.controllers.imap.message_controller import MessageController
+from app.models.app import App
 from app.repos.account import AccountRepo
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -45,45 +51,44 @@ def create_dummy_message(message_id: str, grant_id: str) -> Dict[str, Any]:
         "to": [{"name": "Jane Smith", "email": "jane@example.com"}],
         "created_at": current_timestamp,
         "body": "This is the body of a sample email message. It contains the main content of the email.",
+        "references": [],
     }
 
 
-@router.get("/{message_id}", response_model=Message)
+@router.get("/{message_id}", response_model=MessageResponse)
 @inject
 async def get_message(
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     message_id: str = Path(..., example="1234567890"),
+    app: App = Depends(get_current_app),
     account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
-) -> Message:
+    message_controller: MessageController = Depends(Provide[ApplicationContainer.controllers.imap_message_controller]),
+) -> MessageResponse:
     """
     Get a specific message by ID.
 
     This endpoint handles: GET /v3/grants/{grant_id}/messages/{message_id}
-    Returns dummy JSON data with the same structure as Nylas.
 
-    Demonstrates using the shared fastapi_async_sqlalchemy session through repositories.
+    Fetches actual email content from IMAP server using Message-ID search.
     """
-    # Example: Use the repository with shared database session
-    # In a real implementation, you would:
-    # 1. Validate the grant_id exists by querying accounts
-    # 2. Query the database for the actual message
-    # 3. Return the actual message data
+    account = await account_repo.get_by_app_and_uuid(app.id, grant_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid grant")
 
     try:
-        # Example database query using the shared session
-        accounts = await account_repo.execute(account_repo.base_stmt.limit(1))
-        account_count = len(accounts.all())
+        # Try to fetch the actual message from IMAP
+        message = await message_controller.get_message_by_id(account, message_id)
 
-        # For demonstration, include the account count in the response metadata
-        dummy_message = create_dummy_message(message_id, grant_id)
-        dummy_message["_demo_account_count"] = account_count
-        dummy_message["_demo_using_shared_session"] = True
+        if message is None:
+            # If not found by Message-ID, fall back to dummy data for now
+            # In production, you might want to return 404 instead
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
-        return Message(**dummy_message)
-    except Exception as e:
-        # If database query fails, still return dummy data
-        dummy_message = create_dummy_message(message_id, grant_id)
-        return Message(**dummy_message)
+        return MessageResponse(request_id=str(uuid.uuid4()), data=message)
+
+    except Exception:
+        logger.exception(f"Failed to fetch message {message_id} from IMAP")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch message")
 
 
 @router.get("/", response_model=MessageListResponse)
@@ -92,43 +97,57 @@ async def list_messages(
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    app: App = Depends(get_current_app),
     account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
+    message_controller: MessageController = Depends(Provide[ApplicationContainer.controllers.imap_message_controller]),
 ) -> MessageListResponse:
     """
     List messages for a grant.
 
     This endpoint handles: GET /v3/grants/{grant_id}/messages
-    Returns dummy JSON data with the same structure as Nylas.
-
-    Demonstrates using the shared fastapi_async_sqlalchemy session through repositories.
+    Fetches actual messages from IMAP server with fallback to dummy data.
     """
+    account = await account_repo.get_by_app_and_uuid(app.id, grant_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid grant")
+
     try:
-        # Example: Use repository to validate grant exists and get account info
-        accounts = await account_repo.execute(account_repo.base_stmt.limit(10))
-        all_accounts = accounts.all()
+        # Try to fetch actual messages from IMAP
+        messages = await message_controller.list_messages(account, folder="INBOX", limit=limit, offset=offset)
 
-        # Generate dummy messages
-        messages = [
-            Message(**create_dummy_message(f"msg_{i}", grant_id))
-            for i in range(1, min(limit + 1, 6))  # Max 5 messages for demo
-        ]
-
-        # Add demo metadata to show database integration
-        return MessageListResponse(
-            request_id="dummy-request-id",
-            data=messages,
-            next_cursor="dummy-cursor" if len(messages) >= limit else None,
-        )
+        if messages:
+            return MessageListResponse(
+                request_id="imap-request-id",
+                data=messages,
+                next_cursor="imap-cursor" if len(messages) >= limit else None,
+            )
+        else:
+            # Fall back to dummy data if no messages found
+            dummy_messages = [
+                Message(**create_dummy_message(f"msg_{i}", grant_id))
+                for i in range(1, min(limit + 1, 6))  # Max 5 messages for demo
+            ]
+            return MessageListResponse(
+                request_id="dummy-request-id",
+                data=dummy_messages,
+                next_cursor="dummy-cursor" if len(dummy_messages) >= limit else None,
+            )
 
     except Exception as e:
-        # If database query fails, still return dummy data
-        messages = [
+        # Log the error and fall back to dummy data
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to fetch messages from IMAP: {e}")
+
+        # If IMAP fails, return dummy data
+        dummy_messages = [
             Message(**create_dummy_message(f"msg_{i}", grant_id))
             for i in range(1, min(limit + 1, 6))  # Max 5 messages for demo
         ]
 
         return MessageListResponse(
             request_id="dummy-request-id",
-            data=messages,
-            next_cursor="dummy-cursor" if len(messages) >= limit else None,
+            data=dummy_messages,
+            next_cursor="dummy-cursor" if len(dummy_messages) >= limit else None,
         )
