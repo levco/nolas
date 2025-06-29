@@ -2,10 +2,12 @@ import asyncio
 import logging
 import multiprocessing as mp
 
-from app.database import db_manager, get_db_session
-from app.models import Account
+from app.controllers.imap.email_processor import EmailProcessor
+from app.controllers.imap.listener import IMAPListener
+from app.controllers.imap.models import AccountConfig
+from app.models.account import Account
 from app.repos.account import AccountRepo
-from models import AccountConfig, WorkerConfig
+from models import WorkerConfig
 from settings import settings
 from workers.imap.imap_worker import start_worker
 
@@ -15,29 +17,38 @@ logger = logging.getLogger(__name__)
 def convert_account_model_to_config(account: Account) -> AccountConfig:
     """Convert SQLAlchemy Account model to AccountConfig dataclass."""
     return AccountConfig(
+        id=account.id,
         email=account.email,
-        username=account.username,
-        password=account.password_encrypted,  # TODO: Implement decryption
-        provider=account.provider,
-        webhook_url=account.webhook_url,
+        credentials=account.credentials,
+        provider=account.provider.name,
+        provider_context=account.provider_context,
+        webhook_url=account.app.webhook_url,
     )
 
 
 class IMAPClusterManager:
     """Manages multiple IMAP worker processes for horizontal scaling."""
 
-    def __init__(self, num_workers: int | None = None):
-        self.num_workers = num_workers or settings.worker.num_workers
+    def __init__(
+        self,
+        account_repo: AccountRepo,
+        email_processor: EmailProcessor,
+        imap_listener: IMAPListener,
+        num_workers: int | None = None,
+    ):
         self._worker_processes: list[mp.Process] = []
         self._shutdown_event = mp.Event()
+
+        self._num_workers = num_workers or settings.worker.num_workers
+
+        self._account_repo = account_repo
+        self._email_processor = email_processor
+        self._imap_listener = imap_listener
 
     async def start_cluster(self) -> None:
         """Start the IMAP cluster with distributed accounts."""
         try:
-            logger.info(f"Starting IMAP cluster with {self.num_workers} workers")
-
-            # Initialize database
-            db_manager.init_db()
+            logger.info(f"Starting IMAP cluster with {self._num_workers} workers")
 
             # Load accounts from database
             accounts = await self._load_accounts()
@@ -67,13 +78,12 @@ class IMAPClusterManager:
     async def _load_accounts(self) -> list[AccountConfig]:
         """Load accounts from database using repository."""
         try:
-            async for session in get_db_session():
-                account_repo = AccountRepo(session)
-                accounts_models = await account_repo.get_all_active()
+            accounts_result = await self._account_repo.get_all_active()
+            accounts_models = accounts_result.all()
 
-                # Convert to AccountConfig
-                accounts = [convert_account_model_to_config(acc) for acc in accounts_models]
-                return accounts
+            # Convert to AccountConfig
+            accounts = [convert_account_model_to_config(acc) for acc in accounts_models]
+            return accounts
         except Exception as e:
             logger.error(f"Failed to load accounts: {e}")
         return []
@@ -83,14 +93,14 @@ class IMAPClusterManager:
         if not accounts:
             return []
 
-        chunk_size = max(1, len(accounts) // self.num_workers)
+        chunk_size = max(1, len(accounts) // self._num_workers)
         worker_configs = []
 
-        for i in range(self.num_workers):
+        for i in range(self._num_workers):
             start_idx = i * chunk_size
 
             # Last worker gets remaining accounts
-            if i == self.num_workers - 1:
+            if i == self._num_workers - 1:
                 end_idx = len(accounts)
             else:
                 end_idx = start_idx + chunk_size
@@ -129,7 +139,7 @@ class IMAPClusterManager:
             )
 
             # Run the async worker
-            asyncio.run(start_worker(config))
+            asyncio.run(start_worker(config, self._imap_listener))
 
         except KeyboardInterrupt:
             logger.info(f"Worker {config.worker_id} interrupted")
@@ -161,33 +171,6 @@ class IMAPClusterManager:
             except Exception as e:
                 logger.error(f"Error in worker monitoring: {e}")
                 await asyncio.sleep(10)
-
-    async def add_account(self, account: AccountConfig) -> bool:
-        """Add a new account to the cluster (dynamic scaling)."""
-        try:
-            # Add to database
-            async for session in get_db_session():
-                account_repo = AccountRepo(session)
-                account_data = {
-                    "email": account.email,
-                    "username": account.username,
-                    "password_encrypted": account.password,
-                    "provider": account.provider,
-                    "webhook_url": account.webhook_url,
-                    "is_active": True,
-                }
-                await account_repo.create(account_data)
-                await session.commit()
-                break
-
-            # For now, just restart the cluster
-            # In production, you'd want more sophisticated load balancing
-            logger.info(f"Added account {account.email} to database")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to add account {account.email}: {e}")
-            return False
 
     async def get_cluster_stats(self) -> dict[str, int | list[int]]:
         """Get cluster-wide statistics."""
@@ -227,9 +210,6 @@ class IMAPClusterManager:
     async def _cleanup(self) -> None:
         """Clean up cluster resources."""
         try:
-            # Close database connections
-            await db_manager.close()
-
             logger.info("Cluster cleanup complete")
 
         except Exception as e:

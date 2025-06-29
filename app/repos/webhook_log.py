@@ -1,17 +1,18 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 
+from fastapi_async_sqlalchemy import db
 from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import WebhookLog
+from app.repos.base import BaseRepo
 
 
-class WebhookLogRepo:
+class WebhookLogRepo(BaseRepo[WebhookLog]):
     """Repository for WebhookLog model operations."""
 
-    def __init__(self, session: AsyncSession):
-        self._session = session
+    def __init__(self) -> None:
+        super().__init__(WebhookLog)
 
     async def log_delivery(
         self,
@@ -33,22 +34,22 @@ class WebhookLogRepo:
             error_message=error_message,
             attempts=attempts,
         )
-        self._session.add(webhook_log)
-        await self._session.flush()
+        db.session.add(webhook_log)
+        await db.session.flush()
         return webhook_log
 
-    async def get_by_account_folder(self, account_email: str, folder: str) -> list[WebhookLog]:
+    async def get_by_account_folder(self, account_id: int, folder: str) -> list[WebhookLog]:
         """Get webhook logs by account and folder."""
-        result = await self._session.execute(
+        result = await db.session.execute(
             select(WebhookLog)
-            .where(WebhookLog.account_email == account_email, WebhookLog.folder == folder)
+            .where(WebhookLog.account_id == account_id, WebhookLog.folder == folder)
             .order_by(WebhookLog.created_at.desc())
         )
         return list(result.scalars().all())
 
     async def get_failed_deliveries(self, limit: int = 100) -> list[WebhookLog]:
         """Get failed webhook deliveries."""
-        result = await self._session.execute(
+        result = await db.session.execute(
             select(WebhookLog)
             .where(WebhookLog.status_code.is_(None) | (WebhookLog.status_code >= 400))
             .order_by(WebhookLog.created_at.desc())
@@ -59,9 +60,9 @@ class WebhookLogRepo:
     async def cleanup_old_logs(self, days: int = 30) -> int:
         """Clean up old webhook logs."""
         cutoff_date = func.now() - func.interval(f"{days} days")
-        result = await self._session.execute(delete(WebhookLog).where(WebhookLog.created_at < cutoff_date))
-        await self._session.flush()
-        return result.rowcount
+        result = await db.session.execute(delete(WebhookLog).where(WebhookLog.created_at < cutoff_date))
+        await db.session.flush()
+        return cast(int, result.rowcount)
 
     async def create_log(
         self,
@@ -86,47 +87,47 @@ class WebhookLogRepo:
             delivered_at=delivered_at,
         )
 
-        self._session.add(webhook_log)
-        await self._session.flush()
-        await self._session.refresh(webhook_log)
+        db.session.add(webhook_log)
+        await db.session.flush()
+        await db.session.refresh(webhook_log)
         return webhook_log
 
     async def get_by_id(self, webhook_log_id: int) -> Optional[WebhookLog]:
         """Get webhook log by ID."""
-        result = await self._session.execute(select(WebhookLog).where(WebhookLog.id == webhook_log_id))
-        return result.scalar_one_or_none()
+        result = await db.session.execute(select(WebhookLog).where(WebhookLog.id == webhook_log_id))
+        return cast(Optional[WebhookLog], result.scalar_one_or_none())
 
-    async def get_logs_for_account(self, account_email: str, limit: int = 100, offset: int = 0) -> list[WebhookLog]:
+    async def get_logs_for_account(self, account_id: int, limit: int = 100, offset: int = 0) -> list[WebhookLog]:
         """Get webhook logs for an account."""
-        result = await self._session.execute(
+        result = await db.session.execute(
             select(WebhookLog)
-            .where(WebhookLog.account_email == account_email)
+            .where(WebhookLog.account_id == account_id)
             .order_by(WebhookLog.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
         return list(result.scalars().all())
 
-    async def get_delivery_stats(self, account_email: str) -> dict[str, int]:
+    async def get_delivery_stats(self, account_id: int) -> dict[str, int]:
         """Get delivery statistics for an account."""
         # Total logs
-        total_result = await self._session.execute(
-            select(func.count(WebhookLog.id)).where(WebhookLog.account_email == account_email)
+        total_result = await db.session.execute(
+            select(func.count(WebhookLog.id)).where(WebhookLog.account_id == account_id)
         )
         total = total_result.scalar() or 0
 
         # Delivered logs
-        delivered_result = await self._session.execute(
+        delivered_result = await db.session.execute(
             select(func.count(WebhookLog.id)).where(
-                WebhookLog.account_email == account_email, WebhookLog.delivered_at.is_not(None)
+                WebhookLog.account_id == account_id, WebhookLog.delivered_at.is_not(None)
             )
         )
         delivered = delivered_result.scalar() or 0
 
         # Failed logs (max attempts reached)
-        failed_result = await self._session.execute(
+        failed_result = await db.session.execute(
             select(func.count(WebhookLog.id)).where(
-                WebhookLog.account_email == account_email, WebhookLog.attempts >= 3, WebhookLog.delivered_at.is_(None)
+                WebhookLog.account_id == account_id, WebhookLog.attempts >= 3, WebhookLog.delivered_at.is_(None)
             )
         )
         failed = failed_result.scalar() or 0

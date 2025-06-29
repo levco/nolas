@@ -1,9 +1,7 @@
 import asyncio
 import logging
 
-from app.database import db_manager
-from lib.email_processor import EmailProcessor
-from lib.imap.listener import IMAPListener
+from app.controllers.imap.listener import IMAPListener
 from models import WorkerConfig
 
 logger = logging.getLogger(__name__)
@@ -12,13 +10,11 @@ logger = logging.getLogger(__name__)
 class IMAPWorker:
     """Worker process that handles IMAP listening for a subset of accounts."""
 
-    _email_processor: EmailProcessor
-    _imap_listener: IMAPListener
-
-    def __init__(self, config: WorkerConfig):
-        self.config = config
-        self.worker_id = config.worker_id
-        self.accounts = config.accounts
+    def __init__(self, config: WorkerConfig, imap_listener: IMAPListener):
+        self._config = config
+        self._worker_id = config.worker_id
+        self._accounts = config.accounts
+        self._imap_listener = imap_listener
 
         # State management
         self._active_tasks: list[asyncio.Task[None]] = []
@@ -36,48 +32,29 @@ class IMAPWorker:
     async def run(self) -> None:
         """Main entry point for the worker process."""
         try:
-            logger.info(f"Starting IMAP worker {self.worker_id} with {len(self.accounts)} accounts")
-
-            # Initialize components
-            await self._initialize_components()
+            logger.info(f"Starting IMAP worker {self._worker_id} with {len(self._accounts)} accounts")
 
             # Start account listeners
             await self._start_account_listeners()
 
             # Mark startup complete
             self._stats["startup_time"] = asyncio.get_event_loop().time()
-            logger.info(f"Worker {self.worker_id} startup complete")
+            logger.info(f"Worker {self._worker_id} startup complete")
 
             # Wait for shutdown signal
             await self._shutdown_event.wait()
 
         except Exception as e:
-            logger.error(f"Fatal error in worker {self.worker_id}: {e}")
+            logger.error(f"Fatal error in worker {self._worker_id}: {e}")
             raise
         finally:
             await self._cleanup()
 
-    async def _initialize_components(self) -> None:
-        """Initialize all worker components."""
-        logger.info(f"Worker {self.worker_id}: Initializing components")
-
-        # Initialize database manager
-        db_manager.init_db()
-
-        # Initialize email processor
-        self._email_processor = EmailProcessor()
-        await self._email_processor.init_session()
-
-        # Initialize IMAP listener
-        self._imap_listener = IMAPListener(self._email_processor)
-
-        logger.info(f"Worker {self.worker_id}: Components initialized")
-
     async def _start_account_listeners(self) -> None:
         """Start IMAP listeners for all assigned accounts."""
-        logger.info(f"Worker {self.worker_id}: Starting listeners for {len(self.accounts)} accounts")
+        logger.info(f"Worker {self._worker_id}: Starting listeners for {len(self._accounts)} accounts")
 
-        for account in self.accounts:
+        for account in self._accounts:
             try:
                 # Start account listeners
                 tasks = await self._imap_listener.start_account_listener(account)
@@ -96,15 +73,15 @@ class IMAPWorker:
                 self._stats["connection_errors"] += 1
                 continue
 
-        logger.info(f"Worker {self.worker_id}: Started {self._stats['listeners_started']} total listeners")
+        logger.info(f"Worker {self._worker_id}: Started {self._stats['listeners_started']} total listeners")
 
     async def get_worker_stats(self) -> dict[str, int | str]:
         """Get comprehensive worker statistics."""
         listener_stats = await self._imap_listener.get_listener_stats()
 
         return {
-            "worker_id": self.worker_id,
-            "accounts_assigned": len(self.accounts),
+            "worker_id": self._worker_id,
+            "accounts_assigned": len(self._accounts),
             "accounts_loaded": int(self._stats["accounts_loaded"]),
             "listeners_started": int(self._stats["listeners_started"]),
             "active_listeners": listener_stats["active_listeners"],
@@ -117,7 +94,7 @@ class IMAPWorker:
 
     async def _cleanup(self) -> None:
         """Clean up all resources."""
-        logger.info(f"Worker {self.worker_id}: Starting cleanup")
+        logger.info(f"Worker {self._worker_id}: Starting cleanup")
 
         try:
             # Stop all IMAP listeners
@@ -132,20 +109,13 @@ class IMAPWorker:
             if self._active_tasks:
                 await asyncio.gather(*self._active_tasks, return_exceptions=True)
 
-            # Close email processor session
-            if self._email_processor:
-                await self._email_processor.close_session()
-
-            # Close database connections
-            await db_manager.close()
-
-            logger.info(f"Worker {self.worker_id}: Cleanup complete")
+            logger.info(f"Worker {self._worker_id}: Cleanup complete")
 
         except Exception as e:
-            logger.error(f"Error during worker {self.worker_id} cleanup: {e}")
+            logger.error(f"Error during worker {self._worker_id} cleanup: {e}")
 
 
-async def start_worker(config: WorkerConfig) -> None:
+async def start_worker(config: WorkerConfig, imap_listener: IMAPListener) -> None:
     """Start a worker process with the given configuration."""
-    worker = IMAPWorker(config)
+    worker = IMAPWorker(config, imap_listener)
     await worker.run()

@@ -16,6 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 
 def main() -> None:
     """Run alembic command with the correct config file."""

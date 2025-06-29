@@ -10,6 +10,7 @@ parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
 # Import our models and settings
+
 from app.models import Base  # noqa: E402
 from settings import settings  # noqa: E402
 

@@ -6,7 +6,7 @@ from typing import Any
 
 from aioimaplib import IMAP4_SSL
 
-from models import AccountConfig, Config
+from app.controllers.imap.models import AccountConfig
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConnectionInfo:
     connection: IMAP4_SSL
-    account_email: str
-    provider: str
+    account: AccountConfig
     last_used: float
     is_idle: bool = False
     selected_folder: str | None = None
@@ -52,6 +51,10 @@ class RateLimiter:
             self._tokens = 0
 
 
+# TODO: Make dynamic.
+IMAP_PROVIDERS = ["imap.purelymail.com"]
+
+
 class ConnectionManager:
     """Manages IMAP connections with pooling and rate limiting."""
 
@@ -61,18 +64,19 @@ class ConnectionManager:
         self._connection_locks: dict[str, asyncio.Semaphore] = {}
         self._lock = asyncio.Lock()
 
-        # Initialize rate limiters and connection limits
-        for provider in Config.IMAP_SERVERS.keys():
-            limit = Config.CONNECTION_LIMITS.get(provider, 10)
+        limit = 10
+        for provider in IMAP_PROVIDERS:
             self._connection_locks[provider] = asyncio.Semaphore(limit)
-            self._rate_limiters[provider] = RateLimiter(rate=Config.RATE_LIMIT_PER_PROVIDER, burst=limit)
+            self._rate_limiters[provider] = RateLimiter(rate=limit - 1, burst=limit)
 
     async def get_connection(self, account: AccountConfig, folder: str | None = None) -> IMAP4_SSL:
         """Get an IMAP connection for the account, reusing if possible."""
-        provider = account.provider
+        imap_provider = account.provider_context.get("imap_host")
+        if not imap_provider:
+            raise ValueError("IMAP provider not found in account context")
 
         # Rate limiting
-        await self._rate_limiters[provider].acquire()
+        await self._rate_limiters[imap_provider].acquire()
 
         # Try to reuse existing connection
         connection_info = await self._find_reusable_connection(account, folder)
@@ -80,7 +84,7 @@ class ConnectionManager:
             return connection_info.connection
 
         # Create new connection if under limit
-        async with self._connection_locks[provider]:
+        async with self._connection_locks[imap_provider]:
             return await self._create_new_connection(account, folder)
 
     async def _find_reusable_connection(
@@ -95,7 +99,7 @@ class ConnectionManager:
         async with self._lock:
             for conn_info in self._connections[provider]:
                 if (
-                    conn_info.account_email == account.email
+                    conn_info.account.id == account.id
                     and not conn_info.is_idle
                     and (folder is None or conn_info.selected_folder == folder)
                 ):
@@ -114,31 +118,28 @@ class ConnectionManager:
 
     async def _create_new_connection(self, account: AccountConfig, folder: str | None = None) -> Any:
         """Create a new IMAP connection."""
-        provider = account.provider
-        server_host = Config.IMAP_SERVERS[provider]
+        server_host = account.provider_context.get("imap_host")
+        if not server_host:
+            raise ValueError("IMAP host not found in account context")
 
         try:
             # Use async IMAP library
             connection = IMAP4_SSL(host=server_host, port=993, timeout=settings.imap.timeout)
             await connection.wait_hello_from_server()
-            await connection.login(account.username, account.password)
+            await connection.login(account.email, account.credentials)
 
             if folder:
                 await connection.select(folder)
 
             # Store connection info
             conn_info = ConnectionInfo(
-                connection=connection,
-                account_email=account.email,
-                provider=provider,
-                last_used=time.time(),
-                selected_folder=folder,
+                connection=connection, account=account, last_used=time.time(), selected_folder=folder
             )
 
             async with self._lock:
-                if provider not in self._connections:
-                    self._connections[provider] = []
-                self._connections[provider].append(conn_info)
+                if server_host not in self._connections:
+                    self._connections[server_host] = []
+                self._connections[server_host].append(conn_info)
 
             logger.info(f"Created new IMAP connection for {account.email}:{folder}")
             return connection
@@ -160,91 +161,83 @@ class ConnectionManager:
         """Select a folder on the IMAP connection."""
         await connection.select(folder)
 
-    async def start_idle(self, connection: IMAP4_SSL, account_email: str) -> None:
+    async def start_idle(self, connection: IMAP4_SSL, account: AccountConfig) -> None:
         """Start IDLE mode on a connection."""
-        provider = self._get_provider_by_email(account_email)
-        if not provider:
-            return
+        imap_host = account.provider_context.get("imap_host")
+        if not imap_host:
+            raise ValueError("IMAP host not found in account context")
 
         async with self._lock:
-            for conn_info in self._connections.get(provider, []):
+            for conn_info in self._connections.get(imap_host, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = True
                     break
 
         await connection.idle_start()
 
-    async def stop_idle(self, connection: IMAP4_SSL, account_email: str) -> None:
+    async def stop_idle(self, connection: IMAP4_SSL, account: AccountConfig) -> None:
         """Stop IDLE mode on a connection."""
-        provider = self._get_provider_by_email(account_email)
-        if not provider:
-            return
+        imap_host = account.provider_context.get("imap_host")
+        if not imap_host:
+            raise ValueError("IMAP host not found in account context")
 
         async with self._lock:
-            for conn_info in self._connections.get(provider, []):
+            for conn_info in self._connections.get(imap_host, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = False
                     break
 
         await connection.idle_done()
 
-    async def release_connection(self, connection: IMAP4_SSL, account_email: str) -> None:
+    async def release_connection(self, connection: IMAP4_SSL, account: AccountConfig) -> None:
         """Release a connection back to the pool."""
-        provider = self._get_provider_by_email(account_email)
-        if not provider:
-            return
+        imap_host = account.provider_context.get("imap_host")
+        if not imap_host:
+            raise ValueError("IMAP host not found in account context")
 
         async with self._lock:
-            for conn_info in self._connections.get(provider, []):
+            for conn_info in self._connections.get(imap_host, []):
                 if conn_info.connection == connection:
                     conn_info.is_idle = False
                     conn_info.last_used = time.time()
                     break
 
-    async def close_connection(self, connection: IMAP4_SSL, account_email: str) -> None:
+    async def close_connection(self, connection: IMAP4_SSL, account: AccountConfig) -> None:
         """Close and remove a connection from the pool."""
-        provider = self._get_provider_by_email(account_email)
-        if not provider:
-            return
+        imap_host = account.provider_context.get("imap_host")
+        if not imap_host:
+            raise ValueError("IMAP host not found in account context")
 
         async with self._lock:
-            for conn_info in self._connections.get(provider, []):
+            for conn_info in self._connections.get(imap_host, []):
                 if conn_info.connection == connection:
-                    self._connections[provider].remove(conn_info)
+                    self._connections[imap_host].remove(conn_info)
                     break
 
         try:
             await connection.logout()
         except Exception as e:
-            logger.warning(f"Error closing connection for {account_email}: {e}")
-
-    def _get_provider_by_email(self, account_email: str) -> str | None:
-        """Get provider for an account email."""
-        domain = account_email.split("@")[1].lower()
-        for provider in Config.IMAP_SERVERS.keys():
-            if provider in domain or domain in provider:
-                return provider
-        return None
+            logger.warning(f"Error closing connection for {account.email}: {e}")
 
     async def cleanup_idle_connections(self, max_idle_time: int = 600) -> None:
         """Clean up connections that have been idle too long."""
         current_time = time.time()
-        connections_to_close = []
+        connections_to_close: list[tuple[IMAP4_SSL, AccountConfig]] = []
 
         async with self._lock:
             for provider, conn_list in self._connections.items():
                 for conn_info in conn_list[:]:  # Copy list to avoid modification during iteration
                     if current_time - conn_info.last_used > max_idle_time:
-                        connections_to_close.append((conn_info.connection, conn_info.account_email))
+                        connections_to_close.append((conn_info.connection, conn_info.account))
                         conn_list.remove(conn_info)
 
         # Close idle connections
-        for connection, account_email in connections_to_close:
+        for connection, account in connections_to_close:
             try:
-                await self.close_connection(connection, account_email)
-                logger.info(f"Closed idle connection for {account_email}")
+                await self.close_connection(connection, account)
+                logger.info(f"Closed idle connection for {account.email}")
             except Exception as e:
-                logger.warning(f"Error closing idle connection for {account_email}: {e}")
+                logger.warning(f"Error closing idle connection for {account.email}: {e}")
 
     async def get_connection_stats(self) -> dict[str, dict[str, int]]:
         """Get statistics about current connections."""
@@ -262,19 +255,19 @@ class ConnectionManager:
 
     async def close_all_connections(self) -> None:
         """Close all connections in the pool."""
-        connections_to_close = []
+        connections_to_close: list[tuple[IMAP4_SSL, AccountConfig]] = []
 
         async with self._lock:
-            for provider, conn_list in self._connections.items():
+            for _, conn_list in self._connections.items():
                 for conn_info in conn_list:
-                    connections_to_close.append((conn_info.connection, conn_info.account_email))
+                    connections_to_close.append((conn_info.connection, conn_info.account))
                 conn_list.clear()
 
         # Close all connections
-        for connection, account_email in connections_to_close:
+        for connection, account in connections_to_close:
             try:
-                await self.close_connection(connection, account_email)
+                await self.close_connection(connection, account)
             except Exception as e:
-                logger.warning(f"Error closing connection for {account_email}: {e}")
+                logger.warning(f"Error closing connection: {e}")
 
         logger.info("All IMAP connections closed")

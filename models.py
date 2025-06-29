@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 
-from lib.imap.models import AccountConfig
+from app.controllers.imap.models import AccountConfig
 
 
 @dataclass
@@ -22,22 +22,6 @@ class EmailMessage:
 
 
 class Config:
-    # IMAP server configurations
-    IMAP_SERVERS = {
-        "gmail.com": "imap.gmail.com",
-        "outlook.com": "imap-mail.outlook.com",
-        "purelymail": "imap.purelymail.com",
-        "yahoo.com": "imap.mail.yahoo.com",
-    }
-
-    # Connection limits per provider (conservative to avoid rate limiting)
-    CONNECTION_LIMITS = {
-        "gmail.com": 8,
-        "outlook.com": 15,
-        "purelymail": 20,
-        "yahoo.com": 10,
-    }
-
     # Webhook settings
     WEBHOOK_TIMEOUT = int(os.getenv("WEBHOOK_TIMEOUT", "10"))
     WEBHOOK_MAX_RETRIES = int(os.getenv("WEBHOOK_MAX_RETRIES", "3"))

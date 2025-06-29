@@ -1,21 +1,42 @@
-from sqlalchemy import Boolean, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 
-from .base import Base, TimestampMixin
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base, TimestampMixin, WithUUID
+from .decorators.types import EnumStringType
+
+if TYPE_CHECKING:
+    from .app import App
 
 
-class Account(Base, TimestampMixin):
+class AccountProvider(Enum):
+    imap = "imap"
+
+
+class AccountStatus(Enum):
+    active = "active"
+    inactive = "inactive"
+
+
+class Account(Base, WithUUID, TimestampMixin):
     """Account model for storing email account configurations."""
 
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    username: Mapped[str] = mapped_column(String(255), nullable=False)
-    password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    provider: Mapped[str] = mapped_column(String(100), nullable=False)
-    webhook_url: Mapped[str] = mapped_column(Text, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    app_id: Mapped[int] = mapped_column(sa.ForeignKey("apps.id"), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(sa.String(255), unique=True, nullable=False)
+    provider: Mapped[AccountProvider] = mapped_column(EnumStringType(AccountProvider), nullable=False)
+    credentials: Mapped[str] = mapped_column(sa.String(255), nullable=False, comment="Encrypted password or token")
+    provider_context: Mapped[dict[str, Any]] = mapped_column(JSONB(), nullable=False, server_default=sa.text("'{}'"))
+    status: Mapped[AccountStatus] = mapped_column(
+        EnumStringType(AccountStatus), nullable=False, server_default=AccountStatus.active.name
+    )
+
+    app: Mapped["App"] = relationship("App")
 
     def __repr__(self) -> str:
-        return f"<Account(email='{self.email}', provider='{self.provider}')>"
+        return f"<Account(email='{self.email}', provider='{self.provider.name}')>"

@@ -13,6 +13,11 @@ class DatabaseSettings(BaseSettings):
     min_pool_size: int = Field(alias="DATABASE_MIN_POOL_SIZE", default=5)
     max_pool_size: int = Field(alias="DATABASE_MAX_POOL_SIZE", default=20)
 
+    @property
+    def async_host(self) -> str:
+        """Return the host URL with async driver for SQLAlchemy async engine."""
+        return self.host.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 
 class WorkerSettings(BaseSettings):
     num_workers: int = Field(alias="WORKERS_NUM", default=2)

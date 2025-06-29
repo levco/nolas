@@ -4,12 +4,11 @@ import time
 
 from aioimaplib import IMAP4_SSL, Response
 
-from app.database import get_db_session
+from app.controllers.imap.connection import ConnectionManager
+from app.controllers.imap.email_processor import EmailProcessor
+from app.controllers.imap.models import AccountConfig
 from app.repos.connection_health import ConnectionHealthRepo
 from app.repos.uid_tracking import UidTrackingRepo
-from lib.email_processor import EmailProcessor
-from lib.imap.connection import ConnectionManager
-from models import AccountConfig
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -18,15 +17,26 @@ logger = logging.getLogger(__name__)
 class IMAPListener:
     """Async IMAP listener that monitors folders for new emails."""
 
-    def __init__(self, email_processor: EmailProcessor):
-        self._email_processor = email_processor
-        self._connection_manager = ConnectionManager()
+    def __init__(
+        self,
+        connection_health_repo: ConnectionHealthRepo,
+        uid_tracking_repo: UidTrackingRepo,
+        connection_manager: ConnectionManager,
+        email_processor: EmailProcessor,
+    ):
         self._active_listeners: dict[str, asyncio.Task[None]] = {}  # account:folder -> task
         self._shutdown_event = asyncio.Event()
         self._listener_lock = asyncio.Lock()
 
+        self._connection_health_repo = connection_health_repo
+        self._uid_tracking_repo = uid_tracking_repo
+        self._connection_manager = connection_manager
+        self._email_processor = email_processor
+
     async def start_account_listener(self, account: AccountConfig) -> list[asyncio.Task[None]]:
         """Start listening to all folders for an account."""
+        await self._email_processor.init_session()
+
         try:
             # Get list of folders
             folders = await self._get_account_folders(account)
@@ -50,7 +60,7 @@ class IMAPListener:
 
         except Exception as e:
             logger.error(f"Failed to start account listener for {account.email}: {e}")
-            await self._record_connection_health(account.email, "ALL", False, str(e))
+            await self._record_connection_health(account.id, "ALL", False, str(e))
             return []
 
     async def stop_listener(self, account_email: str, folder: str) -> None:
@@ -112,6 +122,8 @@ class IMAPListener:
         # Close all connections
         await self._connection_manager.close_all_connections()
 
+        await self._email_processor.close_session()
+
         logger.info("Stopped all IMAP listeners")
 
     async def get_listener_stats(self) -> dict[str, int]:
@@ -149,7 +161,7 @@ class IMAPListener:
                             continue
                         folders.append(folder_name)
 
-            await self._connection_manager.release_connection(connection, account.email)
+            await self._connection_manager.release_connection(connection, account)
 
             # Limit folders per account to prevent resource exhaustion
             if len(folders) > 15:
@@ -175,10 +187,8 @@ class IMAPListener:
                 connection = await self._connection_manager.get_connection(account, folder)
 
                 # Initialize UID tracking
-                last_seen_uid = await self._get_last_seen_uid(account.email, folder)
-
+                last_seen_uid = await self._get_last_seen_uid(account.id, folder)
                 status_response = await connection.status(folder, "(UIDNEXT)")
-                # Parse UIDNEXT from response
                 uidnext = self._parse_uidnext(status_response)
 
                 if uidnext is None:
@@ -190,7 +200,7 @@ class IMAPListener:
                     await self._process_new_messages(connection, account, folder, last_seen_uid)
 
                 # Record successful connection
-                await self._record_connection_health(account.email, folder, True)
+                await self._record_connection_health(account.id, folder, True)
                 consecutive_failures = 0
 
                 # Start IDLE monitoring
@@ -204,17 +214,16 @@ class IMAPListener:
                 consecutive_failures += 1
                 error_msg = str(e)
 
-                logger.error(
+                logger.exception(
                     f"Error in listener for {account.email}:{folder} (failure {consecutive_failures}): {error_msg}"
                 )
 
-                # Record connection health
-                await self._record_connection_health(account.email, folder, False, error_msg)
+                await self._record_connection_health(account.id, folder, False, error_msg)
 
                 # Close problematic connection
                 if connection:
                     try:
-                        await self._connection_manager.close_connection(connection, account.email)
+                        await self._connection_manager.close_connection(connection, account)
                     except Exception:
                         pass
                     connection = None
@@ -230,7 +239,7 @@ class IMAPListener:
             finally:
                 if connection:
                     try:
-                        await self._connection_manager.release_connection(connection, account.email)
+                        await self._connection_manager.release_connection(connection, account)
                     except Exception:
                         pass
 
@@ -241,42 +250,32 @@ class IMAPListener:
 
         logger.info(f"Stopped listener for {account.email}:{folder}")
 
-    async def _get_last_seen_uid(self, account_email: str, folder: str) -> int:
+    async def _get_last_seen_uid(self, account_id: int, folder: str) -> int:
         """Get the last seen UID for an account/folder combination using repository."""
         try:
-            async for session in get_db_session():
-                uid_repo = UidTrackingRepo(session)
-                return await uid_repo.get_last_seen_uid(account_email, folder)
+            return await self._uid_tracking_repo.get_last_seen_uid(account_id, folder)
         except Exception as e:
-            logger.error(f"Failed to get last seen UID: {e}")
+            logger.exception(f"Failed to get last seen UID: {e}")
         return 0
 
-    async def _update_last_seen_uid(self, account_email: str, folder: str, uid: int) -> None:
+    async def _update_last_seen_uid(self, account_id: int, folder: str, uid: int) -> None:
         """Update the last seen UID for an account/folder combination using repository."""
         try:
-            async for session in get_db_session():
-                uid_repo = UidTrackingRepo(session)
-                await uid_repo.update_last_seen_uid(account_email, folder, uid)
-                await session.commit()
-                break
-        except Exception as e:
-            logger.error(f"Failed to update last seen UID: {e}")
+            await self._uid_tracking_repo.update_last_seen_uid(account_id, folder, uid)
+        except Exception:
+            logger.exception("Failed to update last seen UID")
 
     async def _record_connection_health(
-        self, account_email: str, folder: str, success: bool, error_message: str | None = None
+        self, account_id: int, folder: str, success: bool, error_message: str | None = None
     ) -> None:
         """Record connection health status using repository."""
         try:
-            async for session in get_db_session():
-                health_repo = ConnectionHealthRepo(session)
-                if success:
-                    await health_repo.record_success(account_email, folder)
-                else:
-                    await health_repo.record_failure(account_email, folder, error_message or "Unknown error")
-                await session.commit()
-                break
-        except Exception as e:
-            logger.error(f"Failed to record connection health: {e}")
+            if success:
+                await self._connection_health_repo.record_success(account_id, folder)
+            else:
+                await self._connection_health_repo.record_failure(account_id, folder, error_message or "Unknown error")
+        except Exception:
+            logger.exception("Failed to record connection health")
 
     def _parse_uidnext(self, status_response: Response) -> int | None:
         """Parse UIDNEXT from IMAP STATUS response."""
@@ -305,36 +304,32 @@ class IMAPListener:
         """Monitor folder using IMAP IDLE."""
         try:
             # Start IDLE
-            await self._connection_manager.start_idle(connection, account.email)
+            await self._connection_manager.start_idle(connection, account)
 
             idle_start_time = time.time()
             max_idle_time = settings.imap.idle_timeout
 
             while not self._shutdown_event.is_set():
                 try:
-                    # Wait for IDLE response with timeout
-                    response = await asyncio.wait_for(
-                        connection.wait_hello_from_server(),
-                        timeout=30,  # Check every 30 seconds
-                    )
+                    response = await asyncio.wait_for(connection.wait_hello_from_server(), timeout=30)
 
                     # Check if it's an EXISTS response (new message)
                     if b"EXISTS" in response:
                         logger.info(f"New message detected in {account.email}:{folder}")
-                        await self._connection_manager.stop_idle(connection, account.email)
+                        await self._connection_manager.stop_idle(connection, account)
 
                         # Process new messages
-                        last_seen_uid = await self._get_last_seen_uid(account.email, folder)
+                        last_seen_uid = await self._get_last_seen_uid(account.id, folder)
                         await self._process_new_messages(connection, account, folder, last_seen_uid)
 
                         # Restart IDLE
-                        await self._connection_manager.start_idle(connection, account.email)
+                        await self._connection_manager.start_idle(connection, account)
                         idle_start_time = time.time()
 
                     # Check if IDLE has been running too long (refresh connection)
                     if time.time() - idle_start_time > max_idle_time:
                         logger.info(f"Refreshing IDLE connection for {account.email}:{folder}")
-                        await self._connection_manager.stop_idle(connection, account.email)
+                        await self._connection_manager.stop_idle(connection, account)
                         break  # Exit IDLE loop to refresh connection
 
                 except asyncio.TimeoutError:
@@ -347,7 +342,7 @@ class IMAPListener:
 
         finally:
             try:
-                await self._connection_manager.stop_idle(connection, account.email)
+                await self._connection_manager.stop_idle(connection, account)
             except Exception:
                 pass
 
@@ -369,9 +364,10 @@ class IMAPListener:
                     await self._email_processor.process_email(account, folder, uid, raw_message)
 
                     # Update UID tracking
-                    await self._update_last_seen_uid(account.email, folder, uid)
+                    await self._update_last_seen_uid(account.id, folder, uid)
 
             logger.info(f"Processed new messages for {account.email}:{folder}")
+            await self._uid_tracking_repo.commit()
 
         except Exception as e:
             logger.error(f"Failed to process new messages for {account.email}:{folder}: {e}")

@@ -1,216 +1,69 @@
-#!/usr/bin/env python3
 """
-Scalable IMAP Email Tracker
-
-A high-performance, async-based IMAP email tracker that can scale to 1000+ email accounts
-using connection pooling, rate limiting, and distributed worker processes.
-
-Usage:
-    python main.py [--mode MODE] [--migrate] [--workers N]
-
-Modes:
-    - cluster: Start cluster manager (default for production)
-    - single: Start single worker process (for development/testing)
-    - migrate: Migrate accounts from old config to database
-
-Environment Variables:
-    DATABASE_URL: PostgreSQL connection string
-    NUM_WORKERS: Number of worker processes
-    WEBHOOK_TIMEOUT: Webhook timeout in seconds
+FastAPI application entry point - Nylas-compatible API
 """
 
-import argparse
-import asyncio
-import logging
-import signal
-import sys
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Dict
 
-from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
-load_dotenv(override=True)
-from app.database import db_manager, get_db_session  # noqa: E402
-from app.models import Account  # noqa: E402
-from app.repos.account import AccountRepo  # noqa: E402
-from lib.imap.models import AccountConfig  # noqa: E402
-from logging_config import setup_logging  # noqa: E402
-from models import WorkerConfig  # noqa: E402
-from workers.cluster_manager import IMAPClusterManager  # noqa: E402
-from workers.imap.imap_worker import start_worker  # noqa: E402
-
-setup_logging()
-
-logger = logging.getLogger(__name__)
+from app.api.routes import api_router
+from app.container import get_wire_container
+from settings.settings import Settings
 
 
-def convert_account_model_to_config(account: Account) -> AccountConfig:
-    """Convert SQLAlchemy Account model to AccountConfig dataclass."""
-    return AccountConfig(
-        email=account.email,
-        username=account.username,
-        password=account.password_encrypted,  # TODO: Implement decryption
-        provider=account.provider,
-        webhook_url=account.webhook_url,
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Application lifespan manager."""
+    # Startup
+    print("Starting up Nolas API...")
+
+    # Initialize dependency injection container
+    container = get_wire_container()
+    app.state.container = container
+
+    yield
+
+    # Shutdown
+    print("Shutting down Nolas API...")
+
+
+def create_app() -> FastAPI:
+    """Create and configure FastAPI application."""
+    settings = Settings()
+
+    app = FastAPI(
+        title="Nolas API",
+        description="Nylas-compatible email API",
+        version="1.0.0",
+        lifespan=lifespan,
     )
 
-
-async def run_cluster_mode(num_workers: int | None = None) -> None:
-    """Run in cluster mode with multiple worker processes."""
-    cluster_manager = IMAPClusterManager(num_workers)
-
-    # Setup signal handlers for graceful shutdown
-    shutdown_event = asyncio.Event()
-
-    def signal_handler() -> None:
-        logger.info("Received shutdown signal")
-        shutdown_event.set()
-
-    # Register signal handlers
-    for sig in [signal.SIGINT, signal.SIGTERM]:
-        signal.signal(sig, lambda s, f: signal_handler())
-
-    try:
-        # Start cluster in background
-        cluster_task = asyncio.create_task(cluster_manager.start_cluster())
-
-        # Wait for shutdown signal
-        await shutdown_event.wait()
-
-        # Graceful shutdown
-        logger.info("Initiating graceful shutdown...")
-        await cluster_manager.shutdown()
-
-        # Cancel cluster task
-        cluster_task.cancel()
-        try:
-            await cluster_task
-        except asyncio.CancelledError:
-            pass
-
-    except Exception as e:
-        logger.error(f"Cluster mode failed: {e}")
-        raise
-
-
-async def run_single_worker_mode() -> None:
-    """Run in single worker mode (for development/testing)."""
-    logger.info("Starting in single worker mode")
-
-    # Initialize database
-    db_manager.init_db()
-
-    try:
-        # Load accounts from database
-        async for session in get_db_session():
-            account_repo = AccountRepo(session)
-            accounts_models = await account_repo.get_all_active()
-
-            if not accounts_models:
-                logger.warning("No active accounts found. Run with --migrate first.")
-                return
-
-            # Convert to AccountConfig
-            accounts = [convert_account_model_to_config(acc) for acc in accounts_models]
-
-            # Create single worker config
-            config = WorkerConfig(worker_id=0, accounts=accounts)
-
-            # Run worker
-            await start_worker(config)
-            break
-
-    finally:
-        await db_manager.close()
-
-
-async def add_test_account() -> None:
-    """Add a test account to the database."""
-    # Initialize database
-    db_manager.init_db()
-
-    try:
-        try:
-            from test_accounts import test_accounts
-        except ImportError:
-            logger.error("test_accounts.py not found")
-            return
-
-        async for session in get_db_session():
-            account_repo = AccountRepo(session)
-
-            for account in test_accounts:
-                account_data = {
-                    "email": account.email,
-                    "username": account.username,
-                    "password_encrypted": account.password,
-                    "provider": account.provider,
-                    "webhook_url": account.webhook_url,
-                    "is_active": True,
-                }
-                await account_repo.create(account_data)
-                await session.commit()
-                logger.info(f"Added test account: {account.email}")
-            break
-
-    finally:
-        await db_manager.close()
-
-
-async def list_accounts() -> None:
-    """List all accounts in the database."""
-    # Initialize database
-    db_manager.init_db()
-
-    try:
-        async for session in get_db_session():
-            account_repo = AccountRepo(session)
-            accounts = await account_repo.get_all_active()
-
-            if not accounts:
-                print("No accounts found in database.")
-                return
-
-            print(f"\nFound {len(accounts)} accounts:")
-            print("-" * 80)
-            for i, account in enumerate(accounts, 1):
-                print(f"{i:2d}. {account.email:30} {account.provider:15} {account.webhook_url}")
-            print("-" * 80)
-            break
-
-    finally:
-        await db_manager.close()
-
-
-def main() -> None:
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description="Scalable IMAP Email Tracker")
-    parser.add_argument(
-        "--mode", choices=["cluster", "single", "migrate", "add-test", "list"], default="cluster", help="Operating mode"
+    # Add SQLAlchemy middleware for database session management
+    database_url = f"{settings.database.async_host}/{settings.database.name}"
+    app.add_middleware(
+        SQLAlchemyMiddleware,
+        db_url=database_url,
+        engine_args={
+            "pool_size": settings.database.min_pool_size,
+            "max_overflow": settings.database.max_pool_size - settings.database.min_pool_size,
+            "pool_pre_ping": True,
+            "pool_recycle": 300,
+        },
     )
-    parser.add_argument("--workers", type=int, help="Number of worker processes")
-    parser.add_argument("--migrate", action="store_true", help="Migrate accounts to database")
 
-    args = parser.parse_args()
+    # Include API routers
+    app.include_router(api_router, prefix="/v3")
 
-    # Handle migration flag for backward compatibility
-    if args.migrate:
-        args.mode = "migrate"
+    # Health check endpoint
+    @app.get("/health")
+    async def health_check() -> Dict[str, str]:
+        """Health check endpoint."""
+        return {"status": "healthy", "service": "nolas-api"}
 
-    try:
-        if args.mode == "cluster":
-            asyncio.run(run_cluster_mode(args.workers))
-        elif args.mode == "single":
-            asyncio.run(run_single_worker_mode())
-        elif args.mode == "add-test":
-            asyncio.run(add_test_account())
-        elif args.mode == "list":
-            asyncio.run(list_accounts())
-
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-    except Exception as e:
-        logger.error(f"Application failed: {e}")
-        sys.exit(1)
+    return app
 
 
-if __name__ == "__main__":
-    main()
+# Create the app instance
+app = create_app()

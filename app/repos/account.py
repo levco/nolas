@@ -1,53 +1,40 @@
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi_async_sqlalchemy import db
+from sqlalchemy import ScalarResult, select
+from sqlalchemy.orm import selectinload
 
-from app.models import Account
+from app.models.account import Account, AccountStatus
+from app.repos.base import BaseRepo
 
 
-class AccountRepo:
+class AccountRepo(BaseRepo[Account]):
     """Repository for Account model operations."""
 
-    def __init__(self, session: AsyncSession):
-        self._session = session
-
-    async def get_by_id(self, account_id: int) -> Account | None:
-        """Get account by ID."""
-        result = await self._session.execute(select(Account).where(Account.id == account_id))
-        return result.scalar_one_or_none()
+    def __init__(self) -> None:
+        super().__init__(Account)
 
     async def get_by_email(self, email: str) -> Account | None:
         """Get account by email."""
-        result = await self._session.execute(select(Account).where(Account.email == email))
-        return result.scalar_one_or_none()
+        result = await db.session.execute(select(Account).where(Account.email == email))
+        return cast(Account | None, result.scalar_one_or_none())
 
-    async def get_all_active(self) -> list[Account]:
+    async def get_all_active(self) -> ScalarResult[Account]:
         """Get all active accounts."""
-        result = await self._session.execute(select(Account).where(Account.is_active.is_(True)))
-        return list(result.scalars().all())
+        query = self.base_stmt.where(Account.status == AccountStatus.active).options(selectinload(Account.app))
+        result = await db.session.execute(query)
+        return cast(ScalarResult[Account], result.scalars())
 
-    async def create(self, account_data: dict[str, Any]) -> Account:
+    async def create_account(self, account_data: dict[str, Any]) -> Account:
         """Create a new account."""
         account = Account(**account_data)
-        self._session.add(account)
-        await self._session.flush()
+        db.session.add(account)
+        await db.session.flush()
         return account
 
     async def update(self, account: Account, update_data: dict[str, Any]) -> Account:
         """Update an account."""
         for key, value in update_data.items():
             setattr(account, key, value)
-        await self._session.flush()
-        return account
-
-    async def delete(self, account: Account) -> None:
-        """Delete an account."""
-        await self._session.delete(account)
-        await self._session.flush()
-
-    async def deactivate(self, account: Account) -> Account:
-        """Deactivate an account."""
-        account.is_active = False
-        await self._session.flush()
+        await db.session.flush()
         return account

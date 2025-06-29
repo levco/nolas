@@ -5,9 +5,9 @@ from datetime import datetime
 
 import aiohttp
 
-from app.database import get_db_session
+from app.controllers.imap.models import AccountConfig
 from app.repos.webhook_log import WebhookLogRepo
-from models import AccountConfig, Config, EmailMessage
+from models import Config, EmailMessage
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 class EmailProcessor:
     """Processes new emails and sends webhooks with retry logic."""
 
-    def __init__(self) -> None:
+    def __init__(self, webhook_log_repo: WebhookLogRepo) -> None:
         self._http_session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
+        self._webhook_log_repo = webhook_log_repo
 
     async def init_session(self) -> None:
         """Initialize HTTP session for webhook delivery."""
@@ -147,7 +148,8 @@ class EmailProcessor:
                 await asyncio.sleep(delay)
 
         logger.error(
-            f"Webhook delivery failed after {max_retries} attempts for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}"
+            f"Webhook delivery failed after {max_retries} attempts for {email_msg.account}:{email_msg.folder} "
+            f"UID {email_msg.uid}"
         )
         return False
 
@@ -164,20 +166,16 @@ class EmailProcessor:
     ) -> None:
         """Log webhook delivery attempt using repository."""
         try:
-            async for session in get_db_session():
-                webhook_repo = WebhookLogRepo(session)
-                await webhook_repo.create_log(
-                    account_email=account_email,
-                    folder=folder,
-                    uid=uid,
-                    webhook_url=webhook_url,
-                    status_code=status_code,
-                    response_body=response_body,
-                    attempts=attempts,
-                    delivered_at=datetime.utcnow() if delivered else None,
-                )
-                await session.commit()
-                break
+            await self._webhook_log_repo.create_log(
+                account_email=account_email,
+                folder=folder,
+                uid=uid,
+                webhook_url=webhook_url,
+                status_code=status_code,
+                response_body=response_body,
+                attempts=attempts,
+                delivered_at=datetime.utcnow() if delivered else None,
+            )
         except Exception as e:
             logger.error(f"Failed to log webhook delivery: {e}")
 
