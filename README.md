@@ -42,32 +42,30 @@ createdb nolas
 
 ## 🚦 Quick Start
 
-### 1. Add Test Account
-
-Add a test account to verify setup:
-
-```bash
-python main.py --mode add-test
-```
-
-### 2. List Accounts
+### 1. List Accounts
 
 View all accounts in the database:
 
 ```bash
-python main.py --mode list
+python manage.py --mode list
 ```
 
-### 3. Start the System
+### 2. Start the System
 
 **Production (Cluster Mode)**:
 
 ```bash
-python main.py --mode cluster --workers 4
+python manage.py --mode cluster --workers 4
 ```
 
 **Development (Single Worker)**:
 
 ```bash
-python main.py --mode single
+python manage.py --mode single
+```
+
+## Run webserver
+
+```
+python server.py
 ```
