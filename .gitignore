@@ -11,5 +11,5 @@ wheels/
 .mypy_cache
 .env
 
-
-test_accounts.py
+# macOS
+.DS_Store
