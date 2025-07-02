@@ -14,6 +14,7 @@ class BaseRepo(Generic[ModelType]):
 
     def __init__(self, model: type[ModelType]) -> None:
         self._model = model
+        self._db = db
 
     @property
     def base_stmt(self) -> Select[tuple[ModelType]]:

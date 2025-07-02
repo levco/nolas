@@ -1,8 +1,4 @@
 from datetime import datetime
-from typing import Optional, cast
-
-from fastapi_async_sqlalchemy import db
-from sqlalchemy import delete, func, select
 
 from app.models import WebhookLog
 from app.repos.base import BaseRepo
@@ -34,35 +30,9 @@ class WebhookLogRepo(BaseRepo[WebhookLog]):
             error_message=error_message,
             attempts=attempts,
         )
-        db.session.add(webhook_log)
-        await db.session.flush()
+        self._db.session.add(webhook_log)
+        await self._db.session.flush()
         return webhook_log
-
-    async def get_by_account_folder(self, account_id: int, folder: str) -> list[WebhookLog]:
-        """Get webhook logs by account and folder."""
-        result = await db.session.execute(
-            select(WebhookLog)
-            .where(WebhookLog.account_id == account_id, WebhookLog.folder == folder)
-            .order_by(WebhookLog.created_at.desc())
-        )
-        return list(result.scalars().all())
-
-    async def get_failed_deliveries(self, limit: int = 100) -> list[WebhookLog]:
-        """Get failed webhook deliveries."""
-        result = await db.session.execute(
-            select(WebhookLog)
-            .where(WebhookLog.status_code.is_(None) | (WebhookLog.status_code >= 400))
-            .order_by(WebhookLog.created_at.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def cleanup_old_logs(self, days: int = 30) -> int:
-        """Clean up old webhook logs."""
-        cutoff_date = func.now() - func.interval(f"{days} days")
-        result = await db.session.execute(delete(WebhookLog).where(WebhookLog.created_at < cutoff_date))
-        await db.session.flush()
-        return cast(int, result.rowcount)
 
     async def create_log(
         self,
@@ -70,10 +40,10 @@ class WebhookLogRepo(BaseRepo[WebhookLog]):
         folder: str,
         uid: int,
         webhook_url: str,
-        status_code: Optional[int] = None,
-        response_body: Optional[str] = None,
+        status_code: int | None = None,
+        response_body: str | None = None,
         attempts: int = 1,
-        delivered_at: Optional[datetime] = None,
+        delivered_at: datetime | None = None,
     ) -> WebhookLog:
         """Create a new webhook log entry."""
         webhook_log = WebhookLog(
@@ -87,49 +57,7 @@ class WebhookLogRepo(BaseRepo[WebhookLog]):
             delivered_at=delivered_at,
         )
 
-        db.session.add(webhook_log)
-        await db.session.flush()
-        await db.session.refresh(webhook_log)
+        self._db.session.add(webhook_log)
+        await self._db.session.flush()
+        await self._db.session.refresh(webhook_log)
         return webhook_log
-
-    async def get_by_id(self, webhook_log_id: int) -> Optional[WebhookLog]:
-        """Get webhook log by ID."""
-        result = await db.session.execute(select(WebhookLog).where(WebhookLog.id == webhook_log_id))
-        return cast(Optional[WebhookLog], result.scalar_one_or_none())
-
-    async def get_logs_for_account(self, account_id: int, limit: int = 100, offset: int = 0) -> list[WebhookLog]:
-        """Get webhook logs for an account."""
-        result = await db.session.execute(
-            select(WebhookLog)
-            .where(WebhookLog.account_id == account_id)
-            .order_by(WebhookLog.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-        return list(result.scalars().all())
-
-    async def get_delivery_stats(self, account_id: int) -> dict[str, int]:
-        """Get delivery statistics for an account."""
-        # Total logs
-        total_result = await db.session.execute(
-            select(func.count(WebhookLog.id)).where(WebhookLog.account_id == account_id)
-        )
-        total = total_result.scalar() or 0
-
-        # Delivered logs
-        delivered_result = await db.session.execute(
-            select(func.count(WebhookLog.id)).where(
-                WebhookLog.account_id == account_id, WebhookLog.delivered_at.is_not(None)
-            )
-        )
-        delivered = delivered_result.scalar() or 0
-
-        # Failed logs (max attempts reached)
-        failed_result = await db.session.execute(
-            select(func.count(WebhookLog.id)).where(
-                WebhookLog.account_id == account_id, WebhookLog.attempts >= 3, WebhookLog.delivered_at.is_(None)
-            )
-        )
-        failed = failed_result.scalar() or 0
-
-        return {"total": total, "delivered": delivered, "failed": failed, "pending": total - delivered - failed}

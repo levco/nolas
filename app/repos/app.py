@@ -9,7 +9,6 @@ class AppRepo(BaseRepo[App]):
         super().__init__(App)
 
     async def get_by_api_key(self, api_key: str) -> App | None:
-        """Get app by api key."""
-        query = self.base_stmt.where(App.api_key == api_key)
-        result = await self.execute(query)
+        """Get app by API key."""
+        result = await self.execute(self.base_stmt.where(App.api_key == api_key))
         return result.one_or_none()
