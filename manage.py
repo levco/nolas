@@ -31,8 +31,6 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 from app.container import ApplicationContainer  # noqa: E402
-from app.controllers.imap.models import AccountConfig  # noqa: E402
-from app.models import Account  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from models import WorkerConfig  # noqa: E402
 from settings import settings  # noqa: E402
@@ -71,18 +69,6 @@ async def fastapi_sqlalchemy_context() -> AsyncGenerator[None, None]:
 
     async with db():
         yield
-
-
-def convert_account_model_to_config(account: Account) -> AccountConfig:
-    """Convert SQLAlchemy Account model to AccountConfig dataclass."""
-    return AccountConfig(
-        id=account.id,
-        email=account.email,
-        credentials=account.credentials,
-        provider=account.provider.name,
-        provider_context=account.provider_context,
-        webhook_url=account.app.webhook_url,
-    )
 
 
 async def run_cluster_mode(num_workers: int | None = None) -> None:
@@ -150,11 +136,8 @@ async def run_single_worker_mode() -> None:
             # Get all accounts
             logger.info(f"Found {len(active_accounts)} active accounts")
 
-            # Convert to AccountConfig
-            accounts = [convert_account_model_to_config(acc) for acc in active_accounts]
-
             # Create single worker config
-            config = WorkerConfig(worker_id=0, accounts=accounts)
+            config = WorkerConfig(worker_id=0, accounts=active_accounts)
 
             # Run worker
             await start_worker(config, imap_listener)

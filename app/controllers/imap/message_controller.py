@@ -2,6 +2,7 @@ import email
 import logging
 import time
 import urllib.parse
+from dataclasses import dataclass
 from email.message import Message as PythonEmailMessage
 from email.utils import getaddresses, mktime_tz, parsedate_tz
 from typing import Any
@@ -9,8 +10,13 @@ from typing import Any
 from app.api.models.messages import EmailAddress, Message, MessageAttachment
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
-from app.controllers.imap.models import AccountConfig
-from app.models.account import Account
+from app.models import Account
+
+
+@dataclass
+class IMAPMessage:
+    message: Message
+    uid: str
 
 
 class MessageController:
@@ -20,7 +26,9 @@ class MessageController:
         self._logger = logging.getLogger(__name__)
         self._connection_manager = connection_manager
 
-    async def get_message_by_id(self, account: Account, message_id: str) -> Message | None:
+    async def get_message_by_id(
+        self, account: Account, message_id: str, folder: str | None = None, uid: str | None = None
+    ) -> IMAPMessage | None:
         """
         Fetch a message by its Message-ID from IMAP server across all folders.
 
@@ -31,49 +39,24 @@ class MessageController:
         Returns:
             Message object in Nylas format or None if not found
         """
-        account_config = self._account_to_config(account)
-
         try:
             # Decode and format the message ID
             search_message_id = self._decode_message_id(message_id)
+            if folder is not None:
+                # Search first in the specified folder with the provided UID.
+                message = await self._get_message_from_folder(account, search_message_id, folder, uid)
+                if message:
+                    return message
 
-            # Get list of all folders using shared utility
-            folders = await FolderUtils.get_account_folders(self._connection_manager, account_config)
-
+            folders = await FolderUtils.get_account_folders(self._connection_manager, account)
             self._logger.info(f"Searching for message ID: {search_message_id} in {len(folders)} folders")
-
-            for folder in folders:
-                connection = None
-                try:
-                    # Get connection for this folder
-                    connection = await self._connection_manager.get_connection(account_config, folder)
-
-                    # Search for the message in this folder
-                    uid = await self._search_message_in_folder(connection, search_message_id, folder)
-
-                    if uid:
-                        # Fetch the message
-                        nylas_message = await self._fetch_message_from_folder(connection, uid, account, folder)
-
-                        if nylas_message:
-                            # Release connection back to pool
-                            await self._connection_manager.release_connection(connection, account_config)
-                            self._logger.info(
-                                f"Successfully retrieved message {search_message_id} from folder {folder}"
-                            )
-                            return nylas_message
-
-                except Exception as folder_error:
-                    self._logger.exception(
-                        f"Error searching folder {folder} for message {search_message_id}: {folder_error}"
-                    )
+            for search_folder in folders:
+                if search_folder == folder:
                     continue
-                finally:
-                    if connection:
-                        try:
-                            await self._connection_manager.release_connection(connection, account_config)
-                        except Exception:
-                            pass
+
+                message = await self._get_message_from_folder(account, search_message_id, search_folder)
+                if message:
+                    return message
 
             self._logger.info(f"Message with ID {search_message_id} not found in any of {len(folders)} folders")
             return None
@@ -82,16 +65,42 @@ class MessageController:
             self._logger.exception(f"Error fetching message {message_id} for account {account.email}")
             return None
 
-    def _account_to_config(self, account: Account) -> AccountConfig:
-        """Convert database Account model to AccountConfig for IMAP operations."""
-        return AccountConfig(
-            id=account.id,
-            email=account.email,
-            credentials=account.credentials,
-            provider=account.provider.value,
-            provider_context=account.provider_context,
-            webhook_url=account.provider_context.get("webhook_url", ""),
-        )
+    async def _get_message_from_folder(
+        self, account: Account, search_message_id: str, folder: str, uid: str | None = None
+    ) -> IMAPMessage | None:
+        """Search for a message by Message-ID in a specific folder."""
+        connection = None
+        try:
+            # Get connection for this folder
+            connection = await self._connection_manager.get_connection(account, folder)
+
+            if uid is not None:
+                message = await self._fetch_message_from_folder(connection, uid, account, folder)
+                if message:
+                    self._logger.info(
+                        f"Successfully retrieved message {search_message_id} from folder {folder} using UID {uid}"
+                    )
+                    return IMAPMessage(message=message, uid=uid)
+
+            # If the UID is not provided or message not found, search for the message in this folder.
+            uid = await self._search_message_in_folder(connection, search_message_id, folder)
+            if uid:
+                message = await self._fetch_message_from_folder(connection, uid, account, folder)
+
+                if message:
+                    self._logger.info(f"Successfully retrieved message {search_message_id} from folder {folder}")
+                    return IMAPMessage(message=message, uid=uid)
+
+        except Exception as folder_error:
+            self._logger.exception(f"Error searching folder {folder} for message {search_message_id}: {folder_error}")
+        finally:
+            if connection:
+                try:
+                    # Close the connection instead of releasing it back to the pool to prevent connection leaks.
+                    await self._connection_manager.close_connection(connection, account)
+                except Exception:
+                    pass
+        return None
 
     def _decode_message_id(self, message_id: str) -> str:
         """
@@ -384,13 +393,7 @@ class MessageController:
                             size = len(payload) if payload else 0
 
                             attachment = MessageAttachment(
-                                id=f"att_{i}",
-                                grant_id=grant_id,
-                                filename=filename,
-                                size=size,
-                                content_type=content_type,
-                                is_inline=False,
-                                content_disposition=content_disposition,
+                                id=f"att_{i}", filename=filename, size=size, content_type=content_type, is_inline=False
                             )
                             attachments.append(attachment)
 
@@ -414,11 +417,10 @@ class MessageController:
         Returns:
             List of Message objects in Nylas format
         """
-        account_config = self._account_to_config(account)
         messages: list[Message] = []
 
         try:
-            connection = await self._connection_manager.get_connection(account_config, folder)
+            connection = await self._connection_manager.get_connection(account, folder)
 
             # Get all message UIDs
             result = await connection.search("ALL")
@@ -452,8 +454,8 @@ class MessageController:
                     self._logger.exception(f"Failed to process message UID {uid}")
                     continue
 
-            # Release connection back to pool
-            await self._connection_manager.release_connection(connection, account_config)
+            # Close connection instead of releasing back to pool to prevent leaks
+            await self._connection_manager.close_connection(connection, account)
 
         except Exception:
             self._logger.exception(f"Error listing messages for account {account.email}")

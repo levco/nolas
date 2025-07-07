@@ -14,7 +14,10 @@ from app.api.routes import api_router
 from app.container import get_wire_container
 from app.exceptions import BaseError, ErrorType
 from environment import EnvironmentName
+from logging_config import setup_logging
 from settings import settings
+
+setup_logging()
 
 logger = logging.getLogger(__name__)
 

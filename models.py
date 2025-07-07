@@ -1,13 +1,14 @@
 import os
 from dataclasses import dataclass
+from typing import Sequence
 
-from app.controllers.imap.models import AccountConfig
+from app.models import Account
 
 
 @dataclass
 class WorkerConfig:
     worker_id: int
-    accounts: list[AccountConfig]
+    accounts: Sequence[Account]
     max_connections_per_provider: int = 50
 
 

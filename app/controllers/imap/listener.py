@@ -7,7 +7,7 @@ from aioimaplib import IMAP4_SSL, Response
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.folder_utils import FolderUtils
-from app.controllers.imap.models import AccountConfig
+from app.models import Account
 from app.repos.connection_health import ConnectionHealthRepo
 from app.repos.uid_tracking import UidTrackingRepo
 from settings import settings
@@ -34,7 +34,7 @@ class IMAPListener:
         self._connection_manager = connection_manager
         self._email_processor = email_processor
 
-    async def start_account_listener(self, account: AccountConfig) -> list[asyncio.Task[None]]:
+    async def start_account_listener(self, account: Account) -> list[asyncio.Task[None]]:
         """Start listening to all folders for an account."""
         await self._email_processor.init_session()
 
@@ -139,7 +139,7 @@ class IMAPListener:
                 "failed_listeners": total_listeners - active_listeners,
             }
 
-    async def _listen_to_folder(self, account: AccountConfig, folder: str) -> None:
+    async def _listen_to_folder(self, account: Account, folder: str) -> None:
         """Listen to a specific folder for new emails."""
         connection = None
         consecutive_failures = 0
@@ -264,7 +264,7 @@ class IMAPListener:
         except Exception:
             return None
 
-    async def _idle_monitor(self, connection: IMAP4_SSL, account: AccountConfig, folder: str) -> None:
+    async def _idle_monitor(self, connection: IMAP4_SSL, account: Account, folder: str) -> None:
         """Monitor folder using IMAP IDLE."""
         try:
             # Start IDLE
@@ -311,7 +311,7 @@ class IMAPListener:
                 pass
 
     async def _process_new_messages(
-        self, connection: IMAP4_SSL, account: AccountConfig, folder: str, last_seen_uid: int
+        self, connection: IMAP4_SSL, account: Account, folder: str, last_seen_uid: int
     ) -> None:
         """Process new messages in the folder."""
         try:

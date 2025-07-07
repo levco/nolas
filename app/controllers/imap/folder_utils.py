@@ -1,10 +1,8 @@
 import logging
 from typing import List
 
-from aioimaplib import IMAP4_SSL
-
 from app.controllers.imap.connection import ConnectionManager
-from app.controllers.imap.models import AccountConfig
+from app.models import Account
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +12,7 @@ class FolderUtils:
 
     @staticmethod
     async def get_account_folders(
-        connection_manager: ConnectionManager, account: AccountConfig, max_folders: int = 15
+        connection_manager: ConnectionManager, account: Account, max_folders: int = 15
     ) -> List[str]:
         """
         Get list of folders for an account.
@@ -48,7 +46,7 @@ class FolderUtils:
                         if folder_name.strip():
                             folders.append(folder_name)
 
-            await connection_manager.release_connection(connection, account)
+            await connection_manager.close_connection(connection, account)
 
             # Limit folders per account to prevent resource exhaustion
             if len(folders) > max_folders:
@@ -58,8 +56,8 @@ class FolderUtils:
             logger.info(f"Found {len(folders)} folders for {account.email}: {folders}")
             return folders
 
-        except Exception as e:
-            logger.exception(f"Failed to get folders for {account.email}: {e}")
+        except Exception:
+            logger.exception(f"Failed to get folders for {account.email}")
             # Return common default folders as fallback
             return ["INBOX", "Sent", "Drafts", "Trash"]
 

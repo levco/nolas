@@ -5,7 +5,7 @@ from datetime import datetime
 
 import aiohttp
 
-from app.controllers.imap.models import AccountConfig
+from app.models import Account
 from app.repos.webhook_log import WebhookLogRepo
 from models import Config, EmailMessage
 
@@ -35,7 +35,7 @@ class EmailProcessor:
             await self._http_session.close()
             self._http_session = None
 
-    async def process_email(self, account: AccountConfig, folder: str, uid: int, raw_message: bytes) -> None:
+    async def process_email(self, account: Account, folder: str, uid: int, raw_message: bytes) -> None:
         """Process a new email and send webhook."""
         try:
             # Parse email message
@@ -61,7 +61,7 @@ class EmailProcessor:
             logger.error(f"Failed to process email UID {uid} for {account.email}:{folder}: {e}")
             raise
 
-    async def send_webhook_with_retry(self, account: AccountConfig, email_msg: EmailMessage) -> bool:
+    async def send_webhook_with_retry(self, account: Account, email_msg: EmailMessage) -> bool:
         """Send webhook with exponential backoff retry logic."""
         await self.init_session()
 
@@ -84,14 +84,14 @@ class EmailProcessor:
         for attempt in range(1, max_retries + 1):
             try:
                 async with self._http_session.post(
-                    account.webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
+                    account.app.webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
                 ) as response:
                     # Log the attempt
                     await self._log_webhook_delivery(
                         email_msg.account,
                         email_msg.folder,
                         email_msg.uid,
-                        account.webhook_url,
+                        account.app.webhook_url,
                         response.status,
                         await response.text() if response.status != 200 else None,
                         attempt,
@@ -120,7 +120,7 @@ class EmailProcessor:
                     email_msg.account,
                     email_msg.folder,
                     email_msg.uid,
-                    account.webhook_url,
+                    account.app.webhook_url,
                     None,
                     "Timeout",
                     attempt,
@@ -135,7 +135,7 @@ class EmailProcessor:
                     email_msg.account,
                     email_msg.folder,
                     email_msg.uid,
-                    account.webhook_url,
+                    account.app.webhook_url,
                     None,
                     str(e),
                     attempt,
@@ -179,7 +179,7 @@ class EmailProcessor:
         except Exception as e:
             logger.error(f"Failed to log webhook delivery: {e}")
 
-    async def send_test_webhook(self, account: AccountConfig) -> bool:
+    async def send_test_webhook(self, account: Account) -> bool:
         """Send a test webhook to verify connectivity."""
         await self.init_session()
 
@@ -195,7 +195,7 @@ class EmailProcessor:
 
         try:
             async with self._http_session.post(
-                account.webhook_url, json=test_payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
+                account.app.webhook_url, json=test_payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
             ) as response:
                 if response.status == 200:
                     logger.info(f"Test webhook successful for {account.email}")
@@ -231,7 +231,7 @@ class EmailProcessor:
             logger.error(f"Failed to extract email headers: {e}")
             return {}
 
-    async def process_batch_emails(self, emails: list[tuple[AccountConfig, str, int, bytes]]) -> int:
+    async def process_batch_emails(self, emails: list[tuple[Account, str, int, bytes]]) -> int:
         """Process multiple emails concurrently."""
         tasks: list[asyncio.Task[None]] = []
 

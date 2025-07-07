@@ -18,12 +18,10 @@ class MessageAttachment(BaseModel):
     """Message attachment model."""
 
     id: str
-    grant_id: str
     filename: str
     size: int
     content_type: str
     is_inline: bool
-    content_disposition: str
 
 
 class Message(BaseModel):

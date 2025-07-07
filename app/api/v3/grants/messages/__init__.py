@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from app.api.middlewares.authentication import get_current_app
 from app.api.models import Message, MessageListResponse, MessageResponse
 from app.container import ApplicationContainer
+from app.controllers.email.email_controller import EmailController
 from app.controllers.imap.message_controller import MessageController
 from app.models.app import App
 from app.repos.account import AccountRepo
@@ -62,7 +63,7 @@ async def get_message(
     message_id: str = Path(..., example="1234567890"),
     app: App = Depends(get_current_app),
     account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
-    message_controller: MessageController = Depends(Provide[ApplicationContainer.controllers.imap_message_controller]),
+    email_controller: EmailController = Depends(Provide[ApplicationContainer.controllers.email_controller]),
 ) -> MessageResponse:
     """
     Get a specific message by ID.
@@ -77,7 +78,7 @@ async def get_message(
 
     try:
         # Try to fetch the actual message from IMAP
-        message = await message_controller.get_message_by_id(account, message_id)
+        message = await email_controller.get_message_by_id(account, message_id)
 
         if message is None:
             # If not found by Message-ID, fall back to dummy data for now
