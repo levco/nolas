@@ -1,4 +1,5 @@
 import asyncio
+import email
 import logging
 import time
 
@@ -324,7 +325,8 @@ class IMAPListener:
                 fetch_response = await connection.fetch(",".join(map(str, uids)), "RFC822")
                 messages = self._parse_fetch_response(fetch_response)
 
-                for uid, raw_message in messages.items():
+                for uid, message_bytes in messages.items():
+                    raw_message = email.message_from_bytes(message_bytes)
                     await self._email_processor.process_email(account, folder, uid, raw_message)
 
                     # Update UID tracking

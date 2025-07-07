@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import multiprocessing as mp
+from typing import Sequence
 
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
-from app.controllers.imap.models import AccountConfig
 from app.models.account import Account
 from app.repos.account import AccountRepo
 from models import WorkerConfig
@@ -12,18 +12,6 @@ from settings import settings
 from workers.imap.imap_worker import start_worker
 
 logger = logging.getLogger(__name__)
-
-
-def convert_account_model_to_config(account: Account) -> AccountConfig:
-    """Convert SQLAlchemy Account model to AccountConfig dataclass."""
-    return AccountConfig(
-        id=account.id,
-        email=account.email,
-        credentials=account.credentials,
-        provider=account.provider.name,
-        provider_context=account.provider_context,
-        webhook_url=account.app.webhook_url,
-    )
 
 
 class IMAPClusterManager:
@@ -75,20 +63,16 @@ class IMAPClusterManager:
         finally:
             await self._cleanup()
 
-    async def _load_accounts(self) -> list[AccountConfig]:
+    async def _load_accounts(self) -> Sequence[Account]:
         """Load accounts from database using repository."""
         try:
             accounts_result = await self._account_repo.get_all_active()
-            accounts_models = accounts_result.all()
-
-            # Convert to AccountConfig
-            accounts = [convert_account_model_to_config(acc) for acc in accounts_models]
-            return accounts
-        except Exception as e:
-            logger.error(f"Failed to load accounts: {e}")
+            return accounts_result.all()
+        except Exception:
+            logger.exception("Failed to load accounts")
         return []
 
-    def _distribute_accounts(self, accounts: list[AccountConfig]) -> list[WorkerConfig]:
+    def _distribute_accounts(self, accounts: Sequence[Account]) -> list[WorkerConfig]:
         """Distribute accounts evenly across workers."""
         if not accounts:
             return []

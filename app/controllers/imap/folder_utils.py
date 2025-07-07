@@ -42,6 +42,11 @@ class FolderUtils:
                     parts = line.split(b'"')
                     if len(parts) >= 3:
                         folder_name = parts[-2].decode("utf-8")
+                        # TODO: Allow selecting what folders to include in a user?
+                        # Ignore these folders by default.
+                        if folder_name.lower() in ["drafts", "junk", "archive", "trash"]:
+                            continue
+
                         # Skip empty folder names
                         if folder_name.strip():
                             folders.append(folder_name)
@@ -59,7 +64,7 @@ class FolderUtils:
         except Exception:
             logger.exception(f"Failed to get folders for {account.email}")
             # Return common default folders as fallback
-            return ["INBOX", "Sent", "Drafts", "Trash"]
+            return ["INBOX", "Sent"]
 
     @staticmethod
     def parse_folder_from_list_response(line: bytes) -> str | None:

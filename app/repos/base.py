@@ -38,6 +38,10 @@ class BaseRepo(Generic[ModelType]):
         else:
             await self.flush()
 
+    async def persist(self, model: ModelType) -> None:
+        """Persist a model instance."""
+        await self.add(model, commit=True)
+
     async def delete(self, model: ModelType) -> None:
         """Delete a model instance."""
         await self._db.session.delete(model)

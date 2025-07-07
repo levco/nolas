@@ -29,13 +29,19 @@ class IMAPSettings(BaseSettings):
     idle_timeout: int = Field(alias="IMAP_IDLE_TIMEOUT", default=1740)  # 29 minutes (RFC requirement)
 
 
+class WebhookSettings(BaseSettings):
+    max_retries: int = Field(alias="WEBHOOK_MAX_RETRIES", default=3)
+    timeout: int = Field(alias="WEBHOOK_TIMEOUT", default=10)
+
+
 class Settings(BaseSettings):
     environment: EnvironmentName = Field(alias="ENVIRONMENT")
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    imap: IMAPSettings = Field(default_factory=IMAPSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
-    imap: IMAPSettings = Field(default_factory=IMAPSettings)
+    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:

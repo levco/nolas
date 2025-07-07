@@ -12,3 +12,4 @@ class App(Base, WithUUID, TimestampMixin):
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     api_key: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     webhook_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)
+    webhook_secret: Mapped[str] = mapped_column(sa.String(255), nullable=True)

@@ -1,13 +1,29 @@
 import asyncio
 import email
+import hashlib
+import hmac
+import json
 import logging
-from datetime import datetime
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.message import Message
+from uuid import UUID
 
 import aiohttp
 
-from app.models import Account
+from app.controllers.imap.message_utils import MessageUtils
+from app.models import Account, WebhookLog
 from app.repos.webhook_log import WebhookLogRepo
-from models import Config, EmailMessage
+from settings import settings
+
+
+@dataclass
+class EmailMessage:
+    uid: int
+    folder: str
+    raw_message: Message
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +40,8 @@ class EmailProcessor:
         """Initialize HTTP session for webhook delivery."""
         async with self._session_lock:
             if self._http_session is None:
-                timeout = aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
-                self._http_session = aiohttp.ClientSession(
-                    timeout=timeout, headers={"Content-Type": "application/json"}
-                )
+                timeout = aiohttp.ClientTimeout(total=settings.webhook.timeout)
+                self._http_session = aiohttp.ClientSession(timeout=timeout)
 
     async def close_session(self) -> None:
         """Close HTTP session."""
@@ -35,33 +49,35 @@ class EmailProcessor:
             await self._http_session.close()
             self._http_session = None
 
-    async def process_email(self, account: Account, folder: str, uid: int, raw_message: bytes) -> None:
+    def _generate_signature(self, message_body: str, webhook_secret: str) -> str:
+        """
+        Generate HMAC-SHA256 signature for webhook authenticity.
+        This matches the Nylas webhook signature format.
+        """
+        if not webhook_secret:
+            return ""
+
+        try:
+            digest = hmac.new(
+                webhook_secret.encode("utf-8"), msg=message_body.encode("utf-8"), digestmod=hashlib.sha256
+            ).hexdigest()
+            return digest
+        except Exception as e:
+            logger.error(f"Error generating webhook signature: {e}")
+            return ""
+
+    async def process_email(self, account: Account, folder: str, uid: int, raw_message: Message) -> None:
         """Process a new email and send webhook."""
         try:
-            # Parse email message
-            msg = email.message_from_bytes(raw_message)
-
             # Create email message object
-            email_msg = EmailMessage(
-                uid=uid,
-                account=account.email,
-                folder=folder,
-                from_address=msg.get("From"),
-                subject=msg.get("Subject"),
-                raw_message=raw_message,
-            )
-
-            # Send webhook with retry logic
-            # await self.send_webhook_with_retry(account, email_msg)
-            print(email_msg)
-
+            message = EmailMessage(folder=folder, uid=uid, raw_message=raw_message)
+            await self.send_webhook_with_retry(account, message)
             logger.info(f"Processed email UID {uid} for {account.email}:{folder}")
-
-        except Exception as e:
-            logger.error(f"Failed to process email UID {uid} for {account.email}:{folder}: {e}")
+        except Exception:
+            logger.exception(f"Failed to process email UID {uid} for {account.email}:{folder}")
             raise
 
-    async def send_webhook_with_retry(self, account: Account, email_msg: EmailMessage) -> bool:
+    async def send_webhook_with_retry(self, account: Account, message: EmailMessage) -> bool:
         """Send webhook with exponential backoff retry logic."""
         await self.init_session()
 
@@ -69,43 +85,59 @@ class EmailProcessor:
             logger.error("HTTP session not initialized")
             return False
 
+        webhook_uuid = uuid.uuid4()
+        nylas_message = MessageUtils.convert_to_nylas_format(
+            msg=message.raw_message, grant_id=account.uuid, folder=message.folder
+        )
         payload = {
-            "from": email_msg.from_address,
-            "subject": email_msg.subject,
-            "account": email_msg.account,
-            "folder": email_msg.folder,
-            "uid": email_msg.uid,
-            "timestamp": asyncio.get_event_loop().time(),
+            "specversion": "1.0",
+            "type": "message.created",
+            "source": "imap",
+            "id": str(webhook_uuid),
+            "time": int(asyncio.get_event_loop().time()),
+            "webhook_delivery_attempt": 1,
+            "data": {"application_id": str(account.app_id), "object": nylas_message.model_dump(by_alias=True)},
         }
 
-        max_retries = Config.WEBHOOK_MAX_RETRIES
+        max_retries = settings.webhook.max_retries
         base_delay = 1.0
 
         for attempt in range(1, max_retries + 1):
+            payload["webhook_delivery_attempt"] = attempt
+            payload_json = json.dumps(payload)
+            signature = self._generate_signature(payload_json, account.app.webhook_secret or "")
+            headers = {"Content-Type": "application/json"}
+            if signature:
+                headers["x-nylas-signature"] = signature
+
             try:
                 async with self._http_session.post(
-                    account.app.webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
+                    account.app.webhook_url,
+                    data=payload_json,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=settings.webhook.timeout),
                 ) as response:
                     # Log the attempt
                     await self._log_webhook_delivery(
-                        email_msg.account,
-                        email_msg.folder,
-                        email_msg.uid,
-                        account.app.webhook_url,
-                        response.status,
-                        await response.text() if response.status != 200 else None,
-                        attempt,
-                        response.status == 200,
+                        account=account,
+                        webhook_uuid=webhook_uuid,
+                        folder=message.folder,
+                        uid=message.uid,
+                        status_code=response.status,
+                        response_body=await response.text() if response.status != 200 else None,
+                        attempts=attempt,
+                        delivered=response.status == 200,
                     )
 
                     if response.status == 200:
                         logger.info(
-                            f"Webhook delivered successfully for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}"
+                            f"Webhook delivered successfully for {account.email}:{message.folder} UID {message.uid}"
                         )
                         return True
                     else:
                         logger.warning(
-                            f"Webhook failed with status {response.status} for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}"
+                            f"Webhook failed with status {response.status} for {account.email}:{message.folder}, "
+                            f"UID {message.uid}"
                         )
 
                         # Don't retry for client errors (4xx)
@@ -114,32 +146,32 @@ class EmailProcessor:
 
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Webhook timeout (attempt {attempt}) for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}"
+                    f"Webhook timeout (attempt {attempt}) for {account.email}:{message.folder} UID {message.uid}"
                 )
                 await self._log_webhook_delivery(
-                    email_msg.account,
-                    email_msg.folder,
-                    email_msg.uid,
-                    account.app.webhook_url,
-                    None,
-                    "Timeout",
-                    attempt,
-                    False,
+                    account=account,
+                    webhook_uuid=webhook_uuid,
+                    folder=message.folder,
+                    uid=message.uid,
+                    status_code=None,
+                    response_body="Timeout",
+                    attempts=attempt,
+                    delivered=False,
                 )
 
             except Exception as e:
                 logger.warning(
-                    f"Webhook error (attempt {attempt}) for {email_msg.account}:{email_msg.folder} UID {email_msg.uid}: {e}"
+                    f"Webhook error (attempt {attempt}) for {account.email}:{message.folder} UID {message.uid}: {e}"
                 )
                 await self._log_webhook_delivery(
-                    email_msg.account,
-                    email_msg.folder,
-                    email_msg.uid,
-                    account.app.webhook_url,
-                    None,
-                    str(e),
-                    attempt,
-                    False,
+                    account=account,
+                    webhook_uuid=webhook_uuid,
+                    folder=message.folder,
+                    uid=message.uid,
+                    status_code=None,
+                    response_body=str(e),
+                    attempts=attempt,
+                    delivered=False,
                 )
 
             # Exponential backoff before retry
@@ -148,17 +180,17 @@ class EmailProcessor:
                 await asyncio.sleep(delay)
 
         logger.error(
-            f"Webhook delivery failed after {max_retries} attempts for {email_msg.account}:{email_msg.folder} "
-            f"UID {email_msg.uid}"
+            f"Webhook delivery failed after {max_retries} attempts for {account.email}:{message.folder}, "
+            f"UID {message.uid}"
         )
         return False
 
     async def _log_webhook_delivery(
         self,
-        account_email: str,
+        account: Account,
+        webhook_uuid: UUID,
         folder: str,
         uid: int,
-        webhook_url: str,
         status_code: int | None = None,
         response_body: str | None = None,
         attempts: int = 1,
@@ -166,15 +198,19 @@ class EmailProcessor:
     ) -> None:
         """Log webhook delivery attempt using repository."""
         try:
-            await self._webhook_log_repo.create_log(
-                account_email=account_email,
-                folder=folder,
-                uid=uid,
-                webhook_url=webhook_url,
-                status_code=status_code,
-                response_body=response_body,
-                attempts=attempts,
-                delivered_at=datetime.utcnow() if delivered else None,
+            await self._webhook_log_repo.persist(
+                WebhookLog(
+                    uuid=webhook_uuid,
+                    app_id=account.app_id,
+                    account_id=account.id,
+                    folder=folder,
+                    uid=uid,
+                    webhook_url=account.app.webhook_url,
+                    status_code=status_code,
+                    response_body=response_body,
+                    attempts=attempts,
+                    delivered_at=datetime.now(UTC) if delivered else None,
+                )
             )
         except Exception as e:
             logger.error(f"Failed to log webhook delivery: {e}")
@@ -187,15 +223,37 @@ class EmailProcessor:
             return False
 
         test_payload = {
-            "test": True,
-            "account": account.email,
-            "message": "IMAP tracker test webhook",
-            "timestamp": asyncio.get_event_loop().time(),
+            "specversion": "1.0",
+            "type": "message.test",
+            "source": f"/{account.email.split('@')[1]}/emails/test",
+            "id": str(uuid.uuid4()),
+            "time": int(asyncio.get_event_loop().time()),
+            "webhook_delivery_attempt": 1,
+            "data": {
+                "application_id": str(account.app_id),
+                "test": True,
+                "account": account.email,
+                "message": "IMAP tracker test webhook",
+            },
         }
+
+        # Convert payload to JSON string for signature generation
+        payload_json = json.dumps(test_payload, separators=(",", ":"))
+
+        # Generate signature for webhook authenticity
+        signature = self._generate_signature(payload_json, account.app.webhook_secret or "")
+
+        # Prepare headers
+        headers = {"Content-Type": "application/json"}
+        if signature:
+            headers["x-nylas-signature"] = signature
 
         try:
             async with self._http_session.post(
-                account.app.webhook_url, json=test_payload, timeout=aiohttp.ClientTimeout(total=Config.WEBHOOK_TIMEOUT)
+                account.app.webhook_url,
+                data=payload_json,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=settings.webhook.timeout),
             ) as response:
                 if response.status == 200:
                     logger.info(f"Test webhook successful for {account.email}")
@@ -231,7 +289,7 @@ class EmailProcessor:
             logger.error(f"Failed to extract email headers: {e}")
             return {}
 
-    async def process_batch_emails(self, emails: list[tuple[Account, str, int, bytes]]) -> int:
+    async def process_batch_emails(self, emails: list[tuple[Account, str, int, Message]]) -> int:
         """Process multiple emails concurrently."""
         tasks: list[asyncio.Task[None]] = []
 
