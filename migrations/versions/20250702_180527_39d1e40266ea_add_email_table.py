@@ -39,6 +39,8 @@ def upgrade() -> None:
         "webhook_logs", sa.Column("uuid", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()"))
     )
     op.add_column("apps", sa.Column("webhook_secret", sa.String(length=255), nullable=True))
+    op.alter_column("emails", "uid", existing_type=sa.VARCHAR(length=255), nullable=True)
+    op.create_index(op.f("ix_webhook_logs_uuid"), "webhook_logs", ["uuid"], unique=False)
     # ### end Alembic commands ###
 
 
@@ -47,3 +49,5 @@ def downgrade() -> None:
     op.drop_column("apps", "webhook_secret")
     op.drop_column("webhook_logs", "uuid")
     op.drop_table("emails")
+    op.drop_index(op.f("ix_webhook_logs_uuid"), table_name="webhook_logs")
+    op.alter_column("emails", "uid", existing_type=sa.VARCHAR(length=255), nullable=False)

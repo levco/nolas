@@ -25,9 +25,11 @@ class ControllerContainer(containers.DeclarativeContainer):
         email_processor=imap_email_processor,
     )
 
+    smtp_controller = providers.Singleton(SMTPController, connection_manager=imap_connection_manager)
+
     email_controller = providers.Singleton(
-        EmailController, email_repo=repos.email, message_controller=imap_message_controller
-    )
-    smtp_controller = providers.Singleton(
-        SMTPController, email_controller=email_controller, connection_manager=imap_connection_manager
+        EmailController,
+        email_repo=repos.email,
+        message_controller=imap_message_controller,
+        smtp_controller=smtp_controller,
     )

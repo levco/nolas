@@ -1,4 +1,4 @@
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Mapping, TypeVar, cast
 
 from fastapi_async_sqlalchemy import db
 from sqlalchemy import ScalarResult, select
@@ -37,6 +37,14 @@ class BaseRepo(Generic[ModelType]):
             await self.commit()
         else:
             await self.flush()
+
+    async def update(self, base_obj: ModelType, update_data: Mapping[str, Any], do_commit: bool = True) -> ModelType:
+        """Update a model instance."""
+        for key, value in update_data.items():
+            setattr(base_obj, key, value)
+        if do_commit:
+            await self.commit()
+        return base_obj
 
     async def persist(self, model: ModelType) -> None:
         """Persist a model instance."""

@@ -3,9 +3,7 @@ SMTP controller for sending emails.
 """
 
 import asyncio
-import html
 import logging
-import re
 import smtplib
 import uuid
 from dataclasses import dataclass
@@ -16,7 +14,7 @@ from typing import Any
 
 from app.api.models.messages import EmailAddress
 from app.api.models.send_messages import SendMessageData
-from app.controllers.email.email_controller import EmailController
+from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
 from app.models.account import Account
@@ -41,9 +39,8 @@ class SMTPInvalidParameterError(Exception):
 class SMTPController:
     """Controller for sending emails via SMTP."""
 
-    def __init__(self, email_controller: EmailController, connection_manager: ConnectionManager) -> None:
+    def __init__(self, connection_manager: ConnectionManager) -> None:
         self._logger = logging.getLogger(__name__)
-        self._email_controller = email_controller
         self._connection_manager = connection_manager
 
     async def send_email(
@@ -56,8 +53,8 @@ class SMTPController:
         cc: list[EmailAddress] | None = None,
         bcc: list[EmailAddress] | None = None,
         reply_to: list[EmailAddress] | None = None,
-        reply_to_message_id: str | None = None,
-    ) -> SendMessageData:
+        replied_message: MessageResult | None = None,
+    ) -> SendMessageResult:
         """
         Send an email via SMTP.
 
@@ -76,13 +73,9 @@ class SMTPController:
             Dictionary containing sent message details
         """
         references: list[str] = []
-        if reply_to_message_id:
-            # Check if the original message exists
-            replied_message_result = await self._email_controller.get_message_by_id(account, reply_to_message_id)
-            if not replied_message_result:
-                raise SMTPInvalidParameterError("reply_to_message_id", reply_to_message_id)
-            original_references = MessageUtils.parse_references(replied_message_result.raw_message)
-            formatted_reply_id = MessageUtils.format_message_id(reply_to_message_id)
+        if replied_message:
+            original_references = MessageUtils.parse_references(replied_message.raw_message)
+            formatted_reply_id = MessageUtils.format_message_id(replied_message.message.id)
 
             if original_references:
                 references = original_references + [formatted_reply_id]
@@ -102,7 +95,7 @@ class SMTPController:
             cc=cc,
             bcc=bcc,
             reply_to=reply_to,
-            reply_to_message_id=reply_to_message_id,
+            reply_to_message_id=replied_message.message.id if replied_message else None,
             references=references,
         )
 
@@ -113,11 +106,11 @@ class SMTPController:
 
         # Save a copy to the Sent folder via IMAP
         try:
-            await self._save_to_sent_folder(account, message)
+            sent_folder = await self._save_to_sent_folder(account, message)
         except Exception as e:
             self._logger.warning(f"Failed to save sent message to Sent folder: {e}")
 
-        return SendMessageData(
+        data = SendMessageData(
             id=message_id,
             subject=subject,
             from_=from_ or [EmailAddress(name=account.email, email=account.email)],
@@ -125,10 +118,13 @@ class SMTPController:
             cc=cc or [],
             bcc=bcc or [],
             reply_to=reply_to or [],
-            reply_to_message_id=reply_to_message_id,
+            reply_to_message_id=replied_message.message.id if replied_message else None,
             body=body,
             attachments=[],
         )
+
+        thread_id = replied_message.message.thread_id if replied_message else message_id
+        return SendMessageResult(message=data, message_id=message_id, thread_id=thread_id, folder=sent_folder)
 
     def _get_smtp_config(self, account: Account) -> _SMTPConfig:
         """Extract SMTP configuration from account."""
@@ -266,7 +262,7 @@ class SMTPController:
             self._logger.error(f"SMTP send failed: {e}")
             raise Exception(f"Failed to send email: {str(e)}")
 
-    async def _save_to_sent_folder(self, account: Account, message: MIMEMultipart) -> None:
+    async def _save_to_sent_folder(self, account: Account, message: MIMEMultipart) -> str | None:
         """Save a copy of the sent message to the Sent folder via IMAP."""
         # Common Sent folder names to try
         sent_folder_names = ["Sent", "SENT", "Sent Items", "Sent Mail", "Sent Messages"]
@@ -284,12 +280,12 @@ class SMTPController:
 
             if not sent_folder:
                 self._logger.warning("No existing sent folder found")
-                return
+                return None
 
             connection = await self._connection_manager.get_connection(account)
             if not connection:
                 self._logger.warning(f"Could not get IMAP connection for account {account.id} to save to Sent folder")
-                return
+                return None
 
             try:
                 # IMAP requires CRLF line endings, not just LF
@@ -297,9 +293,11 @@ class SMTPController:
                 # Convert LF to CRLF for IMAP
                 message_string = message_string.replace("\n", "\r\n")
                 await connection.append(message_string.encode("utf-8"), sent_folder)
-                self._logger.debug(f"Successfully saved message to {sent_folder} folder")
             finally:
                 await self._connection_manager.close_connection(connection, account)
 
+            return sent_folder
+
         except Exception as e:
             self._logger.error(f"Failed to save message to Sent folder: {e}")
+            return None

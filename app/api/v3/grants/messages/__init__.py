@@ -22,10 +22,7 @@ from app.api.models.send_messages import (
 from app.container import ApplicationContainer
 from app.controllers.email.email_controller import EmailController
 from app.controllers.imap.message_controller import MessageController
-from app.controllers.smtp.smtp_controller import (
-    SMTPController,
-    SMTPInvalidParameterError,
-)
+from app.controllers.smtp.smtp_controller import SMTPInvalidParameterError
 from app.models.app import App
 from app.repos.account import AccountRepo
 
@@ -227,7 +224,7 @@ async def send_message(
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     app: App = Depends(get_current_app),
     account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
-    smtp_controller: SMTPController = Depends(Provide[ApplicationContainer.controllers.smtp_controller]),
+    email_controller: EmailController = Depends(Provide[ApplicationContainer.controllers.email_controller]),
 ) -> SendMessageResponse | JSONResponse:
     """
     Sends the specified message.
@@ -239,7 +236,7 @@ async def send_message(
         )
 
     try:
-        message_data = await smtp_controller.send_email(
+        send_message_result = await email_controller.send_email(
             account=account,
             to=request.to,
             subject=request.subject,
@@ -250,7 +247,7 @@ async def send_message(
             reply_to=request.reply_to,
             reply_to_message_id=request.reply_to_message_id,
         )
-        return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=message_data)
+        return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=send_message_result.message)
 
     except SMTPInvalidParameterError as e:
         return create_error_response(
