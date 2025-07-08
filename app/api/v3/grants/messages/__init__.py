@@ -3,7 +3,6 @@ Messages API router - Sub-router for message endpoints under grants.
 """
 
 import logging
-import time
 import uuid
 from typing import Any
 
@@ -12,7 +11,7 @@ from fastapi import APIRouter, Depends, Path, Query, status
 from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
-from app.api.models import Message, MessageListResponse, MessageResponse
+from app.api.models import MessageListResponse, MessageResponse
 from app.api.models.error import ErrorDetail
 from app.api.models.send_messages import (
     SendMessageError,
@@ -49,40 +48,6 @@ def create_error_response(
         request_id=str(uuid.uuid4()), error=ErrorDetail(type=error_type, message=message, provider_error=provider_error)
     )
     return JSONResponse(status_code=status_code, content=error_response.model_dump())
-
-
-def create_dummy_message(message_id: str, grant_id: str) -> dict[str, Any]:
-    """Create dummy message data that matches Nylas API structure."""
-    current_timestamp = int(time.time())
-
-    return {
-        "starred": False,
-        "unread": True,
-        "folders": ["UNREAD", "CATEGORY_PERSONAL", "INBOX"],
-        "grant_id": grant_id,
-        "date": current_timestamp,
-        "attachments": [
-            {
-                "id": "att_1",
-                "grant_id": grant_id,
-                "filename": "example.pdf",
-                "size": 1024,
-                "content_type": "application/pdf",
-                "is_inline": False,
-                "content_disposition": 'attachment; filename="example.pdf"',
-            }
-        ],
-        "from": [{"name": "John Doe", "email": "john@example.com"}],
-        "id": message_id,
-        "object": "message",
-        "snippet": "This is a sample email message from the Nolas API",
-        "subject": "Sample Email Subject",
-        "thread_id": f"thread_{message_id}",
-        "to": [{"name": "Jane Smith", "email": "jane@example.com"}],
-        "created_at": current_timestamp,
-        "body": "This is the body of a sample email message. It contains the main content of the email.",
-        "references": [],
-    }
 
 
 @router.get(
@@ -168,43 +133,9 @@ async def list_messages(
             error_type="invalid_request_error", message="Invalid grant", status_code=status.HTTP_400_BAD_REQUEST
         )
 
-    try:
-        # Try to fetch actual messages from IMAP
-        messages = await message_controller.list_messages(account, folder="INBOX", limit=limit, offset=offset)
-
-        if messages:
-            return MessageListResponse(
-                request_id="imap-request-id",
-                data=messages,
-                next_cursor="imap-cursor" if len(messages) >= limit else None,
-            )
-        else:
-            # Fall back to dummy data if no messages found
-            dummy_messages = [
-                Message(**create_dummy_message(f"msg_{i}", grant_id))
-                for i in range(1, min(limit + 1, 6))  # Max 5 messages for demo
-            ]
-            return MessageListResponse(
-                request_id="dummy-request-id",
-                data=dummy_messages,
-                next_cursor="dummy-cursor" if len(dummy_messages) >= limit else None,
-            )
-
-    except Exception as e:
-        # Log the error and fall back to dummy data
-        logger.error(f"Failed to fetch messages from IMAP: {e}")
-
-        # If IMAP fails, return dummy data
-        dummy_messages = [
-            Message(**create_dummy_message(f"msg_{i}", grant_id))
-            for i in range(1, min(limit + 1, 6))  # Max 5 messages for demo
-        ]
-
-        return MessageListResponse(
-            request_id="dummy-request-id",
-            data=dummy_messages,
-            next_cursor="dummy-cursor" if len(dummy_messages) >= limit else None,
-        )
+    return create_error_response(
+        error_type="unsupported_operation_error", message="Not implemented", status_code=status.HTTP_501_NOT_IMPLEMENTED
+    )
 
 
 @router.post(
