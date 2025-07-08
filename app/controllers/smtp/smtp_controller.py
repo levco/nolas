@@ -2,11 +2,13 @@
 SMTP controller for sending emails.
 """
 
+import asyncio
+import html
 import logging
+import re
 import smtplib
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -106,6 +108,9 @@ class SMTPController:
 
         message_id = await self._send_smtp_message(account, smtp_config, message, to, cc, bcc)
 
+        # Small delay to avoid synchronization issues
+        await asyncio.sleep(0.5)
+
         # Save a copy to the Sent folder via IMAP
         try:
             await self._save_to_sent_folder(account, message)
@@ -153,44 +158,59 @@ class SMTPController:
         references: list[str] | None = None,
     ) -> MIMEMultipart:
         """Create email message."""
-        # Create message
         message = MIMEMultipart("alternative")
 
-        # Attach body first
-        html_part = MIMEText(body, "html", "utf-8")
-        message.attach(html_part)
-
-        # Set headers in order (don't delete existing ones, just override)
-        # Date header (should be early)
-        message["Date"] = formatdate(datetime.now(UTC).timestamp())
+        # Set headers naturally
+        message["Subject"] = subject
+        message["Date"] = formatdate(localtime=True)
 
         # From header
         if from_ and len(from_) > 0:
             sender = from_[0]
-            message["From"] = f"{sender.name} <{sender.email}>"
+            if sender.name:
+                message["From"] = f'"{sender.name}" <{sender.email}>'
+            else:
+                message["From"] = f'"{sender.email}" <{sender.email}>'
         else:
-            message["From"] = account.email
+            message["From"] = f'"{account.email}" <{account.email}>'
 
         # To header
-        to_addresses = [f"{addr.name} <{addr.email}>" for addr in to]
+        to_addresses = []
+        for addr in to:
+            if addr.name:
+                to_addresses.append(f'"{addr.name}" <{addr.email}>')
+            else:
+                to_addresses.append(f'"{addr.email}" <{addr.email}>')
         message["To"] = ", ".join(to_addresses)
 
         # Cc header
         if cc and len(cc) > 0:
-            cc_addresses = [f"{addr.name} <{addr.email}>" for addr in cc]
+            cc_addresses = []
+            for addr in cc:
+                if addr.name:
+                    cc_addresses.append(f'"{addr.name}" <{addr.email}>')
+                else:
+                    cc_addresses.append(f'"{addr.email}" <{addr.email}>')
             message["Cc"] = ", ".join(cc_addresses)
 
         # Bcc header
         if bcc and len(bcc) > 0:
-            bcc_addresses = [f"{addr.name} <{addr.email}>" for addr in bcc]
+            bcc_addresses = []
+            for addr in bcc:
+                if addr.name:
+                    bcc_addresses.append(f'"{addr.name}" <{addr.email}>')
+                else:
+                    bcc_addresses.append(f'"{addr.email}" <{addr.email}>')
             message["Bcc"] = ", ".join(bcc_addresses)
-
-        # Subject header
-        message["Subject"] = subject
 
         # Reply-To header
         if reply_to and len(reply_to) > 0:
-            reply_to_addresses = [f"{addr.name} <{addr.email}>" for addr in reply_to]
+            reply_to_addresses = []
+            for addr in reply_to:
+                if addr.name:
+                    reply_to_addresses.append(f'"{addr.name}" <{addr.email}>')
+                else:
+                    reply_to_addresses.append(f'"{addr.email}" <{addr.email}>')
             message["Reply-To"] = ", ".join(reply_to_addresses)
 
         # In-Reply-To header and References
@@ -199,9 +219,13 @@ class SMTPController:
         if references:
             message["References"] = " ".join(references)
 
-        # Generate and set Message-ID header (towards the end)
+        # Generate Message-ID
         message_id = f"<{uuid.uuid4()}@{account.email.split('@')[1]}>"
         message["Message-ID"] = message_id
+
+        # Body
+        html_part = MIMEText(body, "html", "utf-8")
+        message.attach(html_part)
 
         return message
 
@@ -268,8 +292,11 @@ class SMTPController:
                 return
 
             try:
+                # IMAP requires CRLF line endings, not just LF
                 message_string = message.as_string()
-                await connection.append(message_string.encode(), sent_folder, [r"\Seen"], None)
+                # Convert LF to CRLF for IMAP
+                message_string = message_string.replace("\n", "\r\n")
+                await connection.append(message_string.encode("utf-8"), sent_folder)
                 self._logger.debug(f"Successfully saved message to {sent_folder} folder")
             finally:
                 await self._connection_manager.close_connection(connection, account)
