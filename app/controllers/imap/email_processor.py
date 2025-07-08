@@ -12,9 +12,9 @@ from uuid import UUID
 
 import aiohttp
 
-from app.controllers.imap.message_utils import MessageUtils
 from app.models import Account, WebhookLog
 from app.repos.webhook_log import WebhookLogRepo
+from app.utils.message_utils import MessageUtils
 from settings import settings
 
 

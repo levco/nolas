@@ -1,6 +1,6 @@
 import logging
 
-from app.api.models.messages import Message
+from app.controllers.email.message import MessageResult
 from app.controllers.imap.message_controller import MessageController
 from app.models import Email
 from app.models.account import Account
@@ -15,7 +15,7 @@ class EmailController:
         self._email_repo = email_repo
         self._message_controller = message_controller
 
-    async def get_message_by_id(self, account: Account, message_id: str) -> Message | None:
+    async def get_message_by_id(self, account: Account, message_id: str) -> MessageResult | None:
         """Get message by id."""
         email = await self._email_repo.get_by_account_and_email_id(account.id, message_id)
         folder = email.folder if email else None
@@ -25,11 +25,11 @@ class EmailController:
                 f"thread_id: {email.thread_id}"
             )
 
-        imap_message = await self._message_controller.get_message_by_id(account, message_id, folder)
-        if imap_message is None:
+        message_result = await self._message_controller.get_message_by_id(account, message_id, folder)
+        if message_result is None:
             return None
 
-        message = imap_message.message
+        message = message_result.message
         if (email is None and message is not None) or (message is not None and folder != message.folders[0]):
             self._logger.info(f"Caching email metadata; account_id: {account.id}, email_id: {message_id}")
             # Cache metadata for future lookups.
@@ -39,9 +39,9 @@ class EmailController:
                     email_id=message_id,
                     thread_id=message.thread_id,
                     folder=message.folders[0],
-                    uid=imap_message.uid,
+                    uid=message_result.uid,
                 ),
                 commit=True,
             )
 
-        return message
+        return message_result

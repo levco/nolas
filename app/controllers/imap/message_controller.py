@@ -1,20 +1,15 @@
 import email
 import logging
 import urllib.parse
-from dataclasses import dataclass
+from email.message import Message as PythonEmailMessage
 from typing import Any
 
 from app.api.models.messages import Message
+from app.controllers.email.message import MessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
-from app.controllers.imap.message_utils import MessageUtils
 from app.models import Account
-
-
-@dataclass
-class IMAPMessage:
-    message: Message
-    uid: str
+from app.utils.message_utils import MessageUtils
 
 
 class MessageController:
@@ -26,7 +21,7 @@ class MessageController:
 
     async def get_message_by_id(
         self, account: Account, message_id: str, folder: str | None = None, uid: str | None = None
-    ) -> IMAPMessage | None:
+    ) -> MessageResult | None:
         """
         Fetch a message by its Message-ID from IMAP server across all folders.
 
@@ -65,7 +60,7 @@ class MessageController:
 
     async def _get_message_from_folder(
         self, account: Account, search_message_id: str, folder: str, uid: str | None = None
-    ) -> IMAPMessage | None:
+    ) -> MessageResult | None:
         """Search for a message by Message-ID in a specific folder."""
         connection = None
         try:
@@ -73,21 +68,22 @@ class MessageController:
             connection = await self._connection_manager.get_connection(account, folder)
 
             if uid is not None:
-                message = await self._fetch_message_from_folder(connection, uid, account, folder)
-                if message:
+                raw_message = await self._fetch_message_from_folder(connection, uid, account, folder)
+                if raw_message:
                     self._logger.info(
                         f"Successfully retrieved message {search_message_id} from folder {folder} using UID {uid}"
                     )
-                    return IMAPMessage(message=message, uid=uid)
+                    nylas_message = MessageUtils.convert_to_nylas_format(raw_message, account.uuid, folder)
+                    return MessageResult(message=nylas_message, raw_message=raw_message, uid=uid)
 
             # If the UID is not provided or message not found, search for the message in this folder.
             uid = await self._search_message_in_folder(connection, search_message_id, folder)
             if uid:
-                message = await self._fetch_message_from_folder(connection, uid, account, folder)
-
-                if message:
+                raw_message = await self._fetch_message_from_folder(connection, uid, account, folder)
+                if raw_message:
                     self._logger.info(f"Successfully retrieved message {search_message_id} from folder {folder}")
-                    return IMAPMessage(message=message, uid=uid)
+                    nylas_message = MessageUtils.convert_to_nylas_format(raw_message, account.uuid, folder)
+                    return MessageResult(message=nylas_message, raw_message=raw_message, uid=uid)
 
         except Exception as folder_error:
             self._logger.exception(f"Error searching folder {folder} for message {search_message_id}: {folder_error}")
@@ -201,7 +197,7 @@ class MessageController:
 
     async def _fetch_message_from_folder(
         self, connection: Any, uid: str, account: Account, folder: str
-    ) -> Message | None:
+    ) -> PythonEmailMessage | None:
         """
         Fetch and parse a message from a folder given its UID.
 
@@ -223,11 +219,7 @@ class MessageController:
             if raw_message is None:
                 return None
             parsed_message = email.message_from_bytes(raw_message)
-
-            # Convert to Nylas format
-            nylas_message = MessageUtils.convert_to_nylas_format(parsed_message, account.uuid, folder)
-
-            return nylas_message
+            return parsed_message
 
         except Exception:
             self._logger.exception(f"Error fetching message UID {uid} from folder {folder}")

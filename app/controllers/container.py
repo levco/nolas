@@ -7,6 +7,7 @@ from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
 from app.controllers.imap.message_controller import MessageController
+from app.controllers.smtp.smtp_controller import SMTPController
 from app.repos.container import RepoContainer
 
 
@@ -26,4 +27,7 @@ class ControllerContainer(containers.DeclarativeContainer):
 
     email_controller = providers.Singleton(
         EmailController, email_repo=repos.email, message_controller=imap_message_controller
+    )
+    smtp_controller = providers.Singleton(
+        SMTPController, email_controller=email_controller, connection_manager=imap_connection_manager
     )

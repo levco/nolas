@@ -2,8 +2,6 @@
 Pydantic models for message-related API endpoints.
 """
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -24,24 +22,35 @@ class MessageAttachment(BaseModel):
     is_inline: bool
 
 
-class Message(BaseModel):
+class BaseMessage(BaseModel):
+    """Base message model."""
+
+    id: str
+    subject: str
+    body: str
+    from_: list[EmailAddress] = Field(..., alias="from")
+    to: list[EmailAddress] = Field(default_factory=list)
+    cc: list[EmailAddress] = Field(default_factory=list)
+    bcc: list[EmailAddress] = Field(default_factory=list)
+    reply_to: list[EmailAddress] = Field(default_factory=list)
+    reply_to_message_id: str | None = None
+    attachments: list[MessageAttachment] = Field(default_factory=list)
+
+    class Config:
+        populate_by_name = True
+
+
+class Message(BaseMessage):
     """Message model matching Nylas API structure."""
 
     starred: bool
     unread: bool
-    folders: List[str]
+    folders: list[str]
     grant_id: str
     date: int
-    attachments: List[MessageAttachment]
-    from_: List[EmailAddress] = Field(..., alias="from")
-    id: str
     object: str
     snippet: str
-    subject: str
     thread_id: str
-    to: List[EmailAddress]
-    created_at: int
-    body: str
 
     class Config:
         populate_by_name = True
@@ -58,5 +67,5 @@ class MessageListResponse(BaseModel):
     """Response model for listing messages."""
 
     request_id: str
-    data: List[Message]
-    next_cursor: Optional[str] = None
+    data: list[Message]
+    next_cursor: str | None = None

@@ -34,13 +34,13 @@ class MessageUtils:
             timestamp = int(time.time())
 
         from_header = msg.get("From")
-        from_addresses = MessageUtils._parse_addresses(str(from_header) if from_header else "")  # type: ignore
+        from_addresses = MessageUtils.parse_addresses(str(from_header) if from_header else "")  # type: ignore
         to_header = msg.get("To")
-        to_addresses = MessageUtils._parse_addresses(str(to_header) if to_header else "")  # type: ignore
-        body = MessageUtils._extract_body(msg)
-        references = MessageUtils._parse_references(msg)
+        to_addresses = MessageUtils.parse_addresses(str(to_header) if to_header else "")  # type: ignore
+        body = MessageUtils.extract_body(msg)
+        references = MessageUtils.parse_references(msg)
         snippet = body[:100] + "..." if len(body) > 100 else body  # Create snippet from body (first 100 chars)
-        attachments = MessageUtils._extract_attachments(msg)
+        attachments = MessageUtils.extract_attachments(msg)
         folders = [folder]
 
         return Message(
@@ -57,12 +57,11 @@ class MessageUtils:
             subject=subject,
             thread_id=references[0] if references else message_id,
             to=to_addresses,
-            created_at=timestamp,
             body=body,
         )
 
     @staticmethod
-    def _extract_body(msg: PythonEmailMessage) -> str:
+    def extract_body(msg: PythonEmailMessage) -> str:
         """Extract the body text from an email message."""
         body = ""
 
@@ -115,26 +114,7 @@ class MessageUtils:
         return body.strip()
 
     @staticmethod
-    def _parse_addresses(address_string: str) -> list[EmailAddress]:
-        """Parse email address string into EmailAddress objects."""
-        if not address_string:
-            return []
-
-        try:
-            addresses = getaddresses([address_string])
-            result: list[EmailAddress] = []
-
-            for name, email_addr in addresses:
-                if email_addr:
-                    result.append(EmailAddress(name=name or email_addr, email=email_addr))
-
-            return result
-        except Exception:
-            logger.exception(f"Failed to parse addresses '{address_string}'")
-            return []
-
-    @staticmethod
-    def _parse_references(msg: PythonEmailMessage) -> list[str]:
+    def parse_references(msg: PythonEmailMessage) -> list[str]:
         """
         Parse References and In-Reply-To headers to extract referenced Message-IDs.
 
@@ -158,7 +138,35 @@ class MessageUtils:
         return references
 
     @staticmethod
-    def _extract_attachments(msg: PythonEmailMessage) -> list[MessageAttachment]:
+    def parse_addresses(address_string: str) -> list[EmailAddress]:
+        """Parse email address string into EmailAddress objects."""
+        if not address_string:
+            return []
+
+        try:
+            addresses = getaddresses([address_string])
+            result: list[EmailAddress] = []
+
+            for name, email_addr in addresses:
+                if email_addr:
+                    result.append(EmailAddress(name=name or email_addr, email=email_addr))
+
+            return result
+        except Exception:
+            logger.exception(f"Failed to parse addresses '{address_string}'")
+            return []
+
+    @staticmethod
+    def format_message_id(message_id: str) -> str:
+        """Format a message ID to include angle brackets."""
+        if not message_id.startswith("<"):
+            message_id = f"<{message_id}>"
+        if not message_id.endswith(">"):
+            message_id = f"{message_id}>"
+        return message_id
+
+    @staticmethod
+    def extract_attachments(msg: PythonEmailMessage) -> list[MessageAttachment]:
         """Extract attachments from an email message."""
         attachments = []
 

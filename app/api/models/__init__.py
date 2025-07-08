@@ -9,6 +9,12 @@ from .messages import (
     MessageListResponse,
     MessageResponse,
 )
+from .send_messages import (
+    ErrorDetail,
+    SendMessageError,
+    SendMessageRequest,
+    SendMessageResponse,
+)
 
 __all__ = [
     "EmailAddress",
@@ -16,4 +22,8 @@ __all__ = [
     "MessageAttachment",
     "MessageListResponse",
     "MessageResponse",
+    "SendMessageRequest",
+    "SendMessageResponse",
+    "SendMessageError",
+    "ErrorDetail",
 ]
