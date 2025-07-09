@@ -29,8 +29,3 @@ class EmailRepo(BaseRepo[Email]):
             )
         )
         return result.one_or_none()
-
-    async def get_by_account_id(self, account_id: int) -> list[Email]:
-        """Get all emails for a specific account."""
-        result = await self.execute(self.base_stmt.where(Email.account_id == account_id))
-        return list(result.all())
