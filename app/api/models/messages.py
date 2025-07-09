@@ -19,7 +19,15 @@ class MessageAttachment(BaseModel):
     filename: str
     size: int
     content_type: str
-    is_inline: bool
+    is_inline: bool = False
+
+
+class AttachmentData(BaseModel):
+    """Attachment data model for API requests."""
+
+    filename: str
+    content_type: str
+    data: bytes
 
 
 class BaseMessage(BaseModel):

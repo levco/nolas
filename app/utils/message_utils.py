@@ -166,6 +166,21 @@ class MessageUtils:
         return message_id
 
     @staticmethod
+    def format_email_addresses(addresses: list[EmailAddress]) -> str:
+        """Format a list of email addresses for email headers."""
+        if not addresses:
+            return ""
+
+        formatted_addresses = []
+        for addr in addresses:
+            if addr.name:
+                formatted_addresses.append(f'"{addr.name}" <{addr.email}>')
+            else:
+                formatted_addresses.append(f'"{addr.email}" <{addr.email}>')
+
+        return ", ".join(formatted_addresses)
+
+    @staticmethod
     def extract_attachments(msg: PythonEmailMessage) -> list[MessageAttachment]:
         """Extract attachments from an email message."""
         attachments = []

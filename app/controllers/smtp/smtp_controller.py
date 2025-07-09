@@ -2,17 +2,22 @@
 SMTP controller for sending emails.
 """
 
-import asyncio
 import logging
 import smtplib
 import uuid
 from dataclasses import dataclass
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
 from typing import Any
 
-from app.api.models.messages import EmailAddress, SendMessageData
+from app.api.models.messages import (
+    AttachmentData,
+    EmailAddress,
+    MessageAttachment,
+    SendMessageData,
+)
 from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
@@ -53,6 +58,7 @@ class SMTPController:
         bcc: list[EmailAddress] | None = None,
         reply_to: list[EmailAddress] | None = None,
         replied_message: MessageResult | None = None,
+        attachments: list[AttachmentData] | None = None,
     ) -> SendMessageResult:
         """
         Send an email via SMTP.
@@ -81,10 +87,8 @@ class SMTPController:
             else:
                 references = [formatted_reply_id]
 
-        # Extract SMTP configuration from account
         smtp_config = self._get_smtp_config(account)
 
-        # Create message (the formatted reply ID is already handled above)
         message = self._create_message(
             account=account,
             to=to,
@@ -96,18 +100,27 @@ class SMTPController:
             reply_to=reply_to,
             reply_to_message_id=replied_message.message.id if replied_message else None,
             references=references,
+            attachments=attachments,
         )
 
         message_id = await self._send_smtp_message(account, smtp_config, message, to, cc, bcc)
 
-        # Small delay to avoid synchronization issues
-        await asyncio.sleep(0.5)
-
-        # Save a copy to the Sent folder via IMAP
         try:
             sent_folder = await self._save_to_sent_folder(account, message)
         except Exception as e:
             self._logger.warning(f"Failed to save sent message to Sent folder: {e}")
+
+        attachments_data = []
+        if attachments:
+            for i, attachment in enumerate(attachments):
+                attachments_data.append(
+                    MessageAttachment(
+                        id=f"att_{i}",
+                        filename=attachment.filename,
+                        size=len(attachment.data),
+                        content_type=attachment.content_type,
+                    )
+                )
 
         data = SendMessageData(
             id=message_id,
@@ -119,7 +132,7 @@ class SMTPController:
             reply_to=reply_to or [],
             reply_to_message_id=replied_message.message.id if replied_message else None,
             body=body,
-            attachments=[],
+            attachments=attachments_data,
         )
 
         thread_id = replied_message.message.thread_id if replied_message else message_id
@@ -151,11 +164,13 @@ class SMTPController:
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
         references: list[str] | None = None,
+        attachments: list[AttachmentData] | None = None,
     ) -> MIMEMultipart:
         """Create email message."""
-        message = MIMEMultipart("alternative")
+        # Use "mixed" if there are attachments, otherwise "alternative"
+        message_type = "mixed" if attachments else "alternative"
+        message = MIMEMultipart(message_type)
 
-        # Set headers naturally
         message["Subject"] = subject
         message["Date"] = formatdate(localtime=True)
 
@@ -169,44 +184,17 @@ class SMTPController:
         else:
             message["From"] = f'"{account.email}" <{account.email}>'
 
-        # To header
-        to_addresses = []
-        for addr in to:
-            if addr.name:
-                to_addresses.append(f'"{addr.name}" <{addr.email}>')
-            else:
-                to_addresses.append(f'"{addr.email}" <{addr.email}>')
-        message["To"] = ", ".join(to_addresses)
-
-        # Cc header
-        if cc and len(cc) > 0:
-            cc_addresses = []
-            for addr in cc:
-                if addr.name:
-                    cc_addresses.append(f'"{addr.name}" <{addr.email}>')
-                else:
-                    cc_addresses.append(f'"{addr.email}" <{addr.email}>')
-            message["Cc"] = ", ".join(cc_addresses)
-
-        # Bcc header
-        if bcc and len(bcc) > 0:
-            bcc_addresses = []
-            for addr in bcc:
-                if addr.name:
-                    bcc_addresses.append(f'"{addr.name}" <{addr.email}>')
-                else:
-                    bcc_addresses.append(f'"{addr.email}" <{addr.email}>')
-            message["Bcc"] = ", ".join(bcc_addresses)
+        # To, Cc, Bcc headers
+        if to:
+            message["To"] = MessageUtils.format_email_addresses(to)
+        if cc:
+            message["Cc"] = MessageUtils.format_email_addresses(cc)
+        if bcc:
+            message["Bcc"] = MessageUtils.format_email_addresses(bcc)
 
         # Reply-To header
-        if reply_to and len(reply_to) > 0:
-            reply_to_addresses = []
-            for addr in reply_to:
-                if addr.name:
-                    reply_to_addresses.append(f'"{addr.name}" <{addr.email}>')
-                else:
-                    reply_to_addresses.append(f'"{addr.email}" <{addr.email}>')
-            message["Reply-To"] = ", ".join(reply_to_addresses)
+        if reply_to:
+            message["Reply-To"] = MessageUtils.format_email_addresses(reply_to)
 
         # In-Reply-To header and References
         if reply_to_message_id:
@@ -219,8 +207,24 @@ class SMTPController:
         message["Message-ID"] = message_id
 
         # Body
-        html_part = MIMEText(body, "html", "utf-8")
-        message.attach(html_part)
+        if attachments:
+            # When there are attachments, create a separate container for text content
+            text_container = MIMEMultipart("alternative")
+            html_part = MIMEText(body, "html", "utf-8")
+            text_container.attach(html_part)
+            message.attach(text_container)
+        else:
+            # No attachments, attach HTML directly
+            html_part = MIMEText(body, "html", "utf-8")
+            message.attach(html_part)
+
+        if attachments:
+            for attachment in attachments:
+                attachment_part = MIMEApplication(attachment.data, name=attachment.filename)
+                attachment_part.add_header("Content-Disposition", f"attachment; filename={attachment.filename}")
+                if attachment.content_type:
+                    attachment_part.set_type(attachment.content_type)
+                message.attach(attachment_part)
 
         return message
 

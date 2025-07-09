@@ -1,6 +1,7 @@
 import logging
+from typing import List
 
-from app.api.models.messages import EmailAddress
+from app.api.models.messages import AttachmentData, EmailAddress
 from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.message_controller import MessageController
 from app.controllers.smtp.smtp_controller import (
@@ -66,6 +67,7 @@ class EmailController:
         bcc: list[EmailAddress] | None = None,
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
+        attachments: List[AttachmentData] | None = None,
     ) -> SendMessageResult:
         replied_message_result: MessageResult | None = None
         if reply_to_message_id:
@@ -75,7 +77,16 @@ class EmailController:
                 raise SMTPInvalidParameterError("reply_to_message_id", reply_to_message_id)
 
         send_message_result = await self._smtp_controller.send_email(
-            account, to, subject, body, from_, cc, bcc, reply_to, replied_message_result
+            account=account,
+            to=to,
+            subject=subject,
+            body=body,
+            from_=from_,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            replied_message=replied_message_result,
+            attachments=attachments,
         )
 
         if send_message_result.folder:

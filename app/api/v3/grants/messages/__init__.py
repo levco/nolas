@@ -2,11 +2,12 @@
 Messages API router - Sub-router for message endpoints under grants.
 """
 
+import json
 import logging
 import uuid
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
@@ -17,6 +18,7 @@ from app.api.models import (
     SendMessageResponse,
 )
 from app.api.models.error import APIError
+from app.api.models.messages import AttachmentData
 from app.api.utils.errors import create_error_response
 from app.container import ApplicationContainer
 from app.controllers.email.email_controller import EmailController
@@ -127,11 +129,11 @@ async def list_messages(
         500: {"model": APIError, "description": "Internal server error"},
     },
     summary="Send a message",
-    description="Sends an email message through the specified grant's email account",
+    description="Sends an email message through the specified grant's email account. Supports both JSON and multipart form data (for attachments).",
 )
 @inject
 async def send_message(
-    request: SendMessageRequest,
+    request: Request,
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     app: App = Depends(get_current_app),
     account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
@@ -147,16 +149,26 @@ async def send_message(
         )
 
     try:
+        # Check if this is a multipart request (with attachments)
+        content_type = request.headers.get("content-type", "")
+        if content_type.startswith("multipart/form-data"):
+            message_data, attachments = await _parse_multipart_request(request)
+        else:
+            body = await request.body()
+            message_data = SendMessageRequest.model_validate_json(body)
+            attachments = []
+
         send_message_result = await email_controller.send_email(
             account=account,
-            to=request.to,
-            subject=request.subject,
-            body=request.body,
-            from_=request.from_,
-            cc=request.cc,
-            bcc=request.bcc,
-            reply_to=request.reply_to,
-            reply_to_message_id=request.reply_to_message_id,
+            to=message_data.to,
+            subject=message_data.subject,
+            body=message_data.body,
+            from_=message_data.from_,
+            cc=message_data.cc,
+            bcc=message_data.bcc,
+            reply_to=message_data.reply_to,
+            reply_to_message_id=message_data.reply_to_message_id,
+            attachments=attachments,
         )
         return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=send_message_result.message)
 
@@ -175,3 +187,46 @@ async def send_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             provider_error={"error": str(e)},
         )
+
+
+async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest, list[AttachmentData]]:
+    """
+    Parse multipart form data request to extract message and attachments.
+
+    Expected format:
+    - "Message" field: JSON string with message data
+    - "Attachment" fields: File uploads
+    """
+    attachments = []
+    message_json = None
+
+    # Parse multipart form data
+    form = await request.form()
+
+    for field_name, field_value in form.items():
+        if field_name == "Message":
+            # Parse the JSON message data
+            if isinstance(field_value, str):
+                message_json = json.loads(field_value)
+            else:
+                raise ValueError("Message field must be a JSON string")
+        elif field_name == "Attachment":
+            # Handle attachment
+            if hasattr(field_value, "filename") and hasattr(field_value, "read"):
+                # It's an UploadFile
+                file_content = await field_value.read()
+                attachment = AttachmentData(
+                    filename=field_value.filename or "unknown",
+                    content_type=getattr(field_value, "content_type", "application/octet-stream")
+                    or "application/octet-stream",
+                    data=file_content,
+                )
+                attachments.append(attachment)
+
+    if message_json is None:
+        raise ValueError("Missing 'Message' field in multipart request")
+
+    # Parse the message data
+    message_data = SendMessageRequest.model_validate(message_json)
+
+    return message_data, attachments

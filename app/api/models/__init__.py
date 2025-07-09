@@ -3,6 +3,7 @@ API models package for Pydantic response/request models.
 """
 
 from .messages import (
+    AttachmentData,
     EmailAddress,
     Message,
     MessageAttachment,
@@ -13,6 +14,7 @@ from .messages import (
 )
 
 __all__ = [
+    "AttachmentData",
     "EmailAddress",
     "Message",
     "MessageAttachment",
