@@ -8,7 +8,7 @@ from app.api.models.messages import Message, SendMessageData
 class MessageResult:
     message: Message
     raw_message: PythonMessage
-    uid: str | None = None
+    uid: int | None = None
 
 
 @dataclass

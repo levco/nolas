@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column("thread_id", sa.String(length=255), nullable=False),
         sa.Column("account_id", sa.Integer(), nullable=False),
         sa.Column("folder", sa.String(length=255), nullable=False),
-        sa.Column("uid", sa.String(length=255), nullable=False),
+        sa.Column("uid", sa.Integer(), nullable=True),
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -39,7 +39,6 @@ def upgrade() -> None:
         "webhook_logs", sa.Column("uuid", sa.UUID(), nullable=False, server_default=sa.text("uuid_generate_v4()"))
     )
     op.add_column("apps", sa.Column("webhook_secret", sa.String(length=255), nullable=True))
-    op.alter_column("emails", "uid", existing_type=sa.VARCHAR(length=255), nullable=True)
     op.create_index(op.f("ix_webhook_logs_uuid"), "webhook_logs", ["uuid"], unique=False)
     # ### end Alembic commands ###
 
@@ -50,4 +49,3 @@ def downgrade() -> None:
     op.drop_column("webhook_logs", "uuid")
     op.drop_table("emails")
     op.drop_index(op.f("ix_webhook_logs_uuid"), table_name="webhook_logs")
-    op.alter_column("emails", "uid", existing_type=sa.VARCHAR(length=255), nullable=False)

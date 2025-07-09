@@ -20,7 +20,7 @@ class MessageController:
         self._connection_manager = connection_manager
 
     async def get_message_by_id(
-        self, account: Account, message_id: str, folder: str | None = None, uid: str | None = None
+        self, account: Account, message_id: str, folder: str | None = None, uid: int | None = None
     ) -> MessageResult | None:
         """
         Fetch a message by its Message-ID from IMAP server across all folders.
@@ -38,7 +38,8 @@ class MessageController:
             if folder is not None:
                 # Search first in the specified folder with the provided UID.
                 message = await self._get_message_from_folder(account, search_message_id, folder, uid)
-                if message:
+                if message and message.raw_message.get("Message-ID") == search_message_id:
+                    self._logger.info(f"Used cached message metadata for {search_message_id}")
                     return message
 
             folders = await FolderUtils.get_account_folders(self._connection_manager, account)
@@ -59,7 +60,7 @@ class MessageController:
             return None
 
     async def _get_message_from_folder(
-        self, account: Account, search_message_id: str, folder: str, uid: str | None = None
+        self, account: Account, search_message_id: str, folder: str, uid: int | None = None
     ) -> MessageResult | None:
         """Search for a message by Message-ID in a specific folder."""
         connection = None
@@ -68,7 +69,7 @@ class MessageController:
             connection = await self._connection_manager.get_connection(account, folder)
 
             if uid is not None:
-                raw_message = await self._fetch_message_from_folder(connection, uid, account, folder)
+                raw_message = await self._fetch_message_from_folder(connection, uid, folder)
                 if raw_message:
                     self._logger.info(
                         f"Successfully retrieved message {search_message_id} from folder {folder} using UID {uid}"
@@ -79,7 +80,7 @@ class MessageController:
             # If the UID is not provided or message not found, search for the message in this folder.
             uid = await self._search_message_in_folder(connection, search_message_id, folder)
             if uid:
-                raw_message = await self._fetch_message_from_folder(connection, uid, account, folder)
+                raw_message = await self._fetch_message_from_folder(connection, uid, folder)
                 if raw_message:
                     self._logger.info(f"Successfully retrieved message {search_message_id} from folder {folder}")
                     nylas_message = MessageUtils.convert_to_nylas_format(raw_message, account.uuid, folder)
@@ -109,7 +110,7 @@ class MessageController:
         decoded_message_id = urllib.parse.unquote(message_id)
         return decoded_message_id if decoded_message_id.startswith("<") else f"<{decoded_message_id}>"
 
-    async def _search_message_in_folder(self, connection: Any, search_message_id: str, folder: str) -> str | None:
+    async def _search_message_in_folder(self, connection: Any, search_message_id: str, folder: str) -> int | None:
         """
         Search for a message by Message-ID in a specific folder.
 
@@ -137,7 +138,7 @@ class MessageController:
                 uids = [uid for uid in uids_str.split() if uid.isdigit()]
 
                 if uids:
-                    uid = uids[0]
+                    uid = int(uids[0])
                     self._logger.info(f"Found message {search_message_id} in folder {folder} with UID {uid}")
                     return uid
 
@@ -146,7 +147,7 @@ class MessageController:
             self._logger.exception(f"Error searching for message {search_message_id} in folder {folder}")
             return None
 
-    def _extract_raw_message_from_fetch_result(self, fetch_result: Any, uid: str, folder: str) -> bytes | None:
+    def _extract_raw_message_from_fetch_result(self, fetch_result: Any, uid: int, folder: str) -> bytes | None:
         """
         Extract raw message bytes from IMAP fetch result.
 
@@ -195,9 +196,7 @@ class MessageController:
 
         return raw_message
 
-    async def _fetch_message_from_folder(
-        self, connection: Any, uid: str, account: Account, folder: str
-    ) -> PythonEmailMessage | None:
+    async def _fetch_message_from_folder(self, connection: Any, uid: int, folder: str) -> PythonEmailMessage | None:
         """
         Fetch and parse a message from a folder given its UID.
 

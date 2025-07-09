@@ -31,6 +31,12 @@ class _SMTPConfig:
     port: int
 
 
+class SMTPException(Exception):
+    """Exception raised when an SMTP error occurs."""
+
+    pass
+
+
 class SMTPInvalidParameterError(Exception):
     """Exception raised when a parameter is invalid."""
 
@@ -115,7 +121,7 @@ class SMTPController:
             for i, attachment in enumerate(attachments):
                 attachments_data.append(
                     MessageAttachment(
-                        id=f"att_{i}",
+                        id=f"att_{i + 1}",
                         filename=attachment.filename,
                         size=len(attachment.data),
                         content_type=attachment.content_type,
@@ -262,8 +268,7 @@ class SMTPController:
             return message_id
 
         except Exception as e:
-            self._logger.error(f"SMTP send failed: {e}")
-            raise Exception(f"Failed to send email: {str(e)}")
+            raise SMTPException(f"Failed to send email: {e}")
 
     async def _save_to_sent_folder(self, account: Account, message: MIMEMultipart) -> str | None:
         """Save a copy of the sent message to the Sent folder via IMAP."""
@@ -295,7 +300,7 @@ class SMTPController:
                 message_string = message.as_string()
                 # Convert LF to CRLF for IMAP
                 message_string = message_string.replace("\n", "\r\n")
-                await connection.append(message_string.encode("utf-8"), sent_folder)
+                await connection.append(message_string.encode("utf-8"), sent_folder, flags="\\Seen")
             finally:
                 await self._connection_manager.close_connection(connection, account)
 

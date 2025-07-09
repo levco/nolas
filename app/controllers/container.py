@@ -23,6 +23,7 @@ class ControllerContainer(containers.DeclarativeContainer):
         uid_tracking_repo=repos.uid_tracking,
         connection_manager=imap_connection_manager,
         email_processor=imap_email_processor,
+        email_repo=repos.email,
     )
 
     smtp_controller = providers.Singleton(SMTPController, connection_manager=imap_connection_manager)

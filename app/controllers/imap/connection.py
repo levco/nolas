@@ -160,7 +160,7 @@ class ConnectionManager:
         await connection.select(folder)
 
     async def start_idle(self, connection: IMAP4_SSL, account: Account) -> None:
-        """Start IDLE mode on a connection."""
+        """Mark connection as in IDLE mode."""
         imap_host = account.provider_context.get("imap_host")
         if not imap_host:
             raise ValueError("IMAP host not found in account context")
@@ -171,10 +171,8 @@ class ConnectionManager:
                     conn_info.is_idle = True
                     break
 
-        await connection.idle_start()
-
     async def stop_idle(self, connection: IMAP4_SSL, account: Account) -> None:
-        """Stop IDLE mode on a connection."""
+        """Mark connection as no longer in IDLE mode."""
         imap_host = account.provider_context.get("imap_host")
         if not imap_host:
             raise ValueError("IMAP host not found in account context")
@@ -184,8 +182,6 @@ class ConnectionManager:
                 if conn_info.connection == connection:
                     conn_info.is_idle = False
                     break
-
-        await connection.idle_done()
 
     async def release_connection(self, connection: IMAP4_SSL, account: Account) -> None:
         """Release a connection back to the pool."""

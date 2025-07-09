@@ -4,7 +4,9 @@ Messages API router - Sub-router for message endpoints under grants.
 
 import json
 import logging
+import mimetypes
 import uuid
+from typing import Any
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Path, Query, Request, status
@@ -197,8 +199,8 @@ async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest
     - "Message" field: JSON string with message data
     - "Attachment" fields: File uploads
     """
-    attachments = []
-    message_json = None
+    attachments: list[AttachmentData] = []
+    message_json: dict[str, Any] | None = None
 
     # Parse multipart form data
     form = await request.form()
@@ -215,12 +217,14 @@ async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest
             if hasattr(field_value, "filename") and hasattr(field_value, "read"):
                 # It's an UploadFile
                 file_content = await field_value.read()
-                attachment = AttachmentData(
-                    filename=field_value.filename or "unknown",
-                    content_type=getattr(field_value, "content_type", "application/octet-stream")
-                    or "application/octet-stream",
-                    data=file_content,
-                )
+                filename = field_value.filename or "unknown"
+
+                # Determine content type based on filename extension
+                content_type, _ = mimetypes.guess_type(filename)
+                if content_type is None:
+                    content_type = "application/octet-stream"
+
+                attachment = AttachmentData(filename=filename, content_type=content_type, data=file_content)
                 attachments.append(attachment)
 
     if message_json is None:

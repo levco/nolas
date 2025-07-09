@@ -187,7 +187,8 @@ class MessageUtils:
 
         try:
             if msg.is_multipart():
-                for i, part in enumerate(msg.walk()):
+                attachment_index = 1
+                for part in msg.walk():
                     content_disposition = str(part.get("Content-Disposition", ""))
 
                     if "attachment" in content_disposition:
@@ -198,9 +199,14 @@ class MessageUtils:
                             size = len(payload) if payload else 0
 
                             attachment = MessageAttachment(
-                                id=f"att_{i}", filename=filename, size=size, content_type=content_type, is_inline=False
+                                id=f"att_{attachment_index}",
+                                filename=filename,
+                                size=size,
+                                content_type=content_type,
+                                is_inline=False,
                             )
                             attachments.append(attachment)
+                            attachment_index += 1
 
         except Exception:
             logger.exception("Failed to extract attachments")
