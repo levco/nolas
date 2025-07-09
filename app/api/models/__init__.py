@@ -8,10 +8,6 @@ from .messages import (
     MessageAttachment,
     MessageListResponse,
     MessageResponse,
-)
-from .send_messages import (
-    ErrorDetail,
-    SendMessageError,
     SendMessageRequest,
     SendMessageResponse,
 )
@@ -24,6 +20,4 @@ __all__ = [
     "MessageResponse",
     "SendMessageRequest",
     "SendMessageResponse",
-    "SendMessageError",
-    "ErrorDetail",
 ]

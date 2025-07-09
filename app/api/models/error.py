@@ -9,3 +9,10 @@ class ErrorDetail(BaseModel):
     type: str
     message: str
     provider_error: dict[str, Any] | None = None
+
+
+class APIError(BaseModel):
+    """Error response model that matches Nylas API schema."""
+
+    request_id: str
+    error: ErrorDetail

@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from email.message import Message as PythonMessage
 
-from app.api.models.messages import Message
-from app.api.models.send_messages import SendMessageData
+from app.api.models.messages import Message, SendMessageData
 
 
 @dataclass

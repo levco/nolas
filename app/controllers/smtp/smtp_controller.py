@@ -12,8 +12,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate
 from typing import Any
 
-from app.api.models.messages import EmailAddress
-from app.api.models.send_messages import SendMessageData
+from app.api.models.messages import EmailAddress, SendMessageData
 from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
