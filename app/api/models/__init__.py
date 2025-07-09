@@ -15,6 +15,7 @@ from .messages import (
 
 __all__ = [
     "AttachmentData",
+    "AttachmentResponse",
     "EmailAddress",
     "Message",
     "MessageAttachment",

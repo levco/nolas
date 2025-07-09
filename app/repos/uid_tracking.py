@@ -32,6 +32,6 @@ class UidTrackingRepo(BaseRepo[UidTracking]):
                 tracking.last_checked_at = func.now()
         else:
             tracking = UidTracking(account_id=account_id, folder=folder, last_seen_uid=uid)
-            self._db.session.add(tracking)
+            await self.add(tracking)
 
         return tracking
