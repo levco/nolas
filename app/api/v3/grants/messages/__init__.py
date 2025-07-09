@@ -21,13 +21,12 @@ from app.api.models import (
 )
 from app.api.models.error import APIError
 from app.api.models.messages import AttachmentData
-from app.api.utils.errors import create_error_response
+from app.api.utils.errors import create_error_response, validate_grant_access
 from app.container import ApplicationContainer
 from app.controllers.email.email_controller import EmailController
 from app.controllers.imap.message_controller import MessageController
 from app.controllers.smtp.smtp_controller import SMTPInvalidParameterError
 from app.models.app import App
-from app.repos.account import AccountRepo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,20 +49,15 @@ async def get_message(
     message_id: str = Path(..., example="1234567890"),
     fields: str = Query(None, description="Comma-separated list of fields to include"),
     app: App = Depends(get_current_app),
-    account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
     email_controller: EmailController = Depends(Provide[ApplicationContainer.controllers.email_controller]),
 ) -> MessageResponse | JSONResponse:
     """
     Gets a specific message by ID.
     """
-    account = await account_repo.get_by_app_and_uuid(app.id, grant_id)
-    if account is None:
-        return create_error_response(
-            error_type="invalid_request_error",
-            message="Invalid grant",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            provider_error={"grant_id": grant_id},
-        )
+    account, error_response = await validate_grant_access(app.id, grant_id)
+    if error_response:
+        return error_response
+    assert account is not None  # account is guaranteed to be not None when error_response is None
 
     try:
         # Try to fetch the actual message from IMAP
@@ -105,17 +99,15 @@ async def list_messages(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     app: App = Depends(get_current_app),
-    account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
     message_controller: MessageController = Depends(Provide[ApplicationContainer.controllers.imap_message_controller]),
 ) -> MessageListResponse | JSONResponse:
     """
     Lists messages for a grant.
     """
-    account = await account_repo.get_by_app_and_uuid(app.id, grant_id)
-    if account is None:
-        return create_error_response(
-            error_type="invalid_request_error", message="Invalid grant", status_code=status.HTTP_400_BAD_REQUEST
-        )
+    account, error_response = await validate_grant_access(app.id, grant_id)
+    if error_response:
+        return error_response
+    assert account is not None  # account is guaranteed to be not None when error_response is None
 
     return create_error_response(
         error_type="unsupported_operation_error", message="Not implemented", status_code=status.HTTP_501_NOT_IMPLEMENTED
@@ -138,17 +130,15 @@ async def send_message(
     request: Request,
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     app: App = Depends(get_current_app),
-    account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
     email_controller: EmailController = Depends(Provide[ApplicationContainer.controllers.email_controller]),
 ) -> SendMessageResponse | JSONResponse:
     """
     Sends the specified message.
     """
-    account = await account_repo.get_by_app_and_uuid(app.id, grant_id)
-    if account is None:
-        return create_error_response(
-            error_type="invalid_request_error", message="Invalid grant", status_code=status.HTTP_400_BAD_REQUEST
-        )
+    account, error_response = await validate_grant_access(app.id, grant_id)
+    if error_response:
+        return error_response
+    assert account is not None  # account is guaranteed to be not None when error_response is None
 
     try:
         # Check if this is a multipart request (with attachments)

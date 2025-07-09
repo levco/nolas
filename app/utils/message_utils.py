@@ -212,3 +212,27 @@ class MessageUtils:
             logger.exception("Failed to extract attachments")
 
         return attachments
+
+    @staticmethod
+    def extract_attachment_content(msg: PythonEmailMessage, attachment_id: str) -> bytes | None:
+        """Extract the content of a specific attachment from an email message."""
+        try:
+            if msg.is_multipart():
+                attachment_index = 1
+                for part in msg.walk():
+                    content_disposition = str(part.get("Content-Disposition", ""))
+
+                    if "attachment" in content_disposition:
+                        filename = part.get_filename()
+                        if filename:
+                            current_attachment_id = f"att_{attachment_index}"
+                            if current_attachment_id == attachment_id:
+                                payload = part.get_payload(decode=True)
+                                if payload and isinstance(payload, bytes):
+                                    return payload
+                            attachment_index += 1
+
+        except Exception:
+            logger.exception(f"Failed to extract attachment content for {attachment_id}")
+
+        return None
