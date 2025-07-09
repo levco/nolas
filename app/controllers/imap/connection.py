@@ -213,9 +213,16 @@ class ConnectionManager:
 
         # Close the connection (even if not found in pool, in case it's already been removed)
         try:
-            await connection.logout()
+            await asyncio.wait_for(connection.logout(), timeout=5)
             if connection_found:
                 logger.debug(f"Closed connection for {account.email}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout closing connection for {account.email}, forcing close")
+            # Force close the connection if logout hangs
+            try:
+                connection.close()
+            except Exception:
+                pass
         except Exception as e:
             logger.warning(f"Error closing connection for {account.email}: {e}")
 
@@ -263,10 +270,12 @@ class ConnectionManager:
                     connections_to_close.append((conn_info.connection, conn_info.account))
                 conn_list.clear()
 
-        # Close all connections
+        # Close all connections with timeout per connection
         for connection, account in connections_to_close:
             try:
-                await self.close_connection(connection, account)
+                await asyncio.wait_for(self.close_connection(connection, account), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout closing connection for {account.email}, skipping")
             except Exception as e:
                 logger.warning(f"Error closing connection: {e}")
 
