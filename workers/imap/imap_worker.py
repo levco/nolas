@@ -19,6 +19,7 @@ class IMAPWorker:
         # State management
         self._active_tasks: list[asyncio.Task[None]] = []
         self._shutdown_event = asyncio.Event()
+        self._worker_task: asyncio.Task[None] | None = None
 
         # Performance tracking
         self._stats = {
@@ -114,8 +115,33 @@ class IMAPWorker:
         except Exception as e:
             logger.error(f"Error during worker {self._worker_id} cleanup: {e}")
 
+    async def shutdown(self) -> None:
+        """Trigger shutdown of the worker."""
+        logger.info(f"Worker {self._worker_id}: Shutdown requested")
+        self._shutdown_event.set()
 
-async def start_worker(config: WorkerConfig, imap_listener: IMAPListener) -> None:
+        # Wait for the worker task to complete
+        if self._worker_task and not self._worker_task.done():
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def start_worker(config: WorkerConfig, imap_listener: IMAPListener) -> IMAPWorker:
     """Start a worker process with the given configuration."""
+    worker = IMAPWorker(config, imap_listener)
+
+    # Start the worker in background
+    worker_task = asyncio.create_task(worker.run())
+
+    # Store the task for cleanup
+    worker._worker_task = worker_task
+
+    return worker
+
+
+async def start_worker_blocking(config: WorkerConfig, imap_listener: IMAPListener) -> None:
+    """Start a worker process with the given configuration (blocking version for cluster mode)."""
     worker = IMAPWorker(config, imap_listener)
     await worker.run()

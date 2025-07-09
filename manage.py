@@ -139,8 +139,28 @@ async def run_single_worker_mode() -> None:
             # Create single worker config
             config = WorkerConfig(worker_id=0, accounts=active_accounts)
 
-            # Run worker
-            await start_worker(config, imap_listener)
+            # Setup signal handlers for graceful shutdown
+            shutdown_event = asyncio.Event()
+
+            def signal_handler() -> None:
+                logger.info("Received shutdown signal")
+                shutdown_event.set()
+
+            # Register signal handlers
+            for sig in [signal.SIGINT, signal.SIGTERM]:
+                signal.signal(sig, lambda s, f: signal_handler())
+
+            # Start worker
+            worker = await start_worker(config, imap_listener)
+
+            # Wait for shutdown signal
+            await shutdown_event.wait()
+
+            # Graceful shutdown
+            logger.info("Initiating graceful shutdown...")
+
+            # Shutdown the worker (this will trigger cleanup)
+            await worker.shutdown()
 
         except Exception:
             logger.exception("Error in single worker mode")

@@ -9,7 +9,7 @@ from app.models.account import Account
 from app.repos.account import AccountRepo
 from models import WorkerConfig
 from settings import settings
-from workers.imap.imap_worker import start_worker
+from workers.imap.imap_worker import start_worker_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class IMAPClusterManager:
             )
 
             # Run the async worker
-            asyncio.run(start_worker(config, self._imap_listener))
+            asyncio.run(start_worker_blocking(config, self._imap_listener))
 
         except KeyboardInterrupt:
             logger.info(f"Worker {config.worker_id} interrupted")
