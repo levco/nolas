@@ -281,16 +281,12 @@ class IMAPListener:
 
             while not self._shutdown_event.is_set():
                 try:
-                    # Start IDLE session
-                    self._logger.info(f"Starting IDLE session for {account.email}:{folder}")
                     idle_task = await connection.idle_start(timeout=30)
-                    self._logger.info(f"IDLE task started for {account.email}:{folder}")
 
                     # Wait for server push notifications
                     while connection.has_pending_idle() and not self._shutdown_event.is_set():
                         try:
                             response = await asyncio.wait_for(connection.wait_server_push(), timeout=30)
-                            self._logger.info(f"IDLE response for {account.email}:{folder}: {response}")
 
                             # Check if it's an EXISTS response (new message)
                             # Response can be a list or single bytes
