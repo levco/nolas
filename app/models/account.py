@@ -19,6 +19,7 @@ class AccountProvider(Enum):
 class AccountStatus(Enum):
     active = "active"
     inactive = "inactive"
+    pending = "pending"
 
 
 class Account(Base, WithUUID, TimestampMixin):

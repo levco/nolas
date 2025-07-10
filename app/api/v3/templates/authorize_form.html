@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize IMAP Access</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .form-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"], input[type="password"], input[type="email"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .error {
+            color: #dc3545;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f8d7da;
+            border-radius: 4px;
+        }
+        .app-info {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        .alert {
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            display: none;
+        }
+        .alert-error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .alert-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <div class="app-info">
+            <strong>{{ app_name }}</strong> is requesting access to your Email account
+        </div>
+        
+        <h1>Connect Your Email</h1>
+        
+        <!-- Alert messages -->
+        <div id="alert" class="alert">
+            <span id="alert-message"></span>
+        </div>
+        
+        {% if error %}
+        <div class="alert alert-error" style="display: block;">
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        <form id="auth-form" method="post" action="/v3/connect/process">
+            <!-- Hidden OAuth2 parameters -->
+            <input type="hidden" name="client_id" value="{{ client_id }}">
+            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+            <input type="hidden" name="state" value="{{ state }}">
+            {% if scope %}
+            <input type="hidden" name="scope" value="{{ scope }}">
+            {% endif %}
+            
+            <div class="form-group">
+                <label for="email">Email Address:</label>
+                <input type="email" id="email" name="email" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="imap_host">IMAP Server:</label>
+                <input type="text" id="imap_host" name="imap_host" placeholder="imap.gmail.com" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="imap_port">IMAP Port:</label>
+                <input type="number" id="imap_port" name="imap_port" value="993" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="smtp_host">SMTP Server:</label>
+                <input type="text" id="smtp_host" name="smtp_host" placeholder="smtp.gmail.com" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="smtp_port">SMTP Port:</label>
+                <input type="number" id="smtp_port" name="smtp_port" value="465" required>
+            </div>
+            
+            <button type="submit" class="btn" id="submit-btn">Authorize Access</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('auth-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const submitBtn = document.getElementById('submit-btn');
+            const alert = document.getElementById('alert');
+            const alertMessage = document.getElementById('alert-message');
+            
+            // Show loading state
+            form.classList.add('loading');
+            submitBtn.textContent = 'Connecting...';
+            submitBtn.disabled = true;
+            
+            // Hide previous alerts
+            alert.style.display = 'none';
+            alert.className = 'alert';
+            
+            try {
+                const formData = new FormData(form);
+                
+                const response = await fetch('/v3/connect/process', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    // Show success message briefly
+                    alert.className = 'alert alert-success';
+                    alertMessage.textContent = 'Connection successful! Redirecting...';
+                    alert.style.display = 'block';
+                    
+                    // Redirect after a short delay
+                    setTimeout(() => {
+                        window.location.href = result.redirect_url;
+                    }, 1000);
+                } else {
+                    // Show error message
+                    alert.className = 'alert alert-error';
+                    alertMessage.textContent = result.error || 'An error occurred. Please try again.';
+                    alert.style.display = 'block';
+                    
+                    // Reset form state
+                    form.classList.remove('loading');
+                    submitBtn.textContent = 'Authorize Access';
+                    submitBtn.disabled = false;
+                }
+            } catch (error) {
+                // Handle network errors
+                alert.className = 'alert alert-error';
+                alertMessage.textContent = 'Network error. Please check your connection and try again.';
+                alert.style.display = 'block';
+                
+                // Reset form state
+                form.classList.remove('loading');
+                submitBtn.textContent = 'Authorize Access';
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html> 

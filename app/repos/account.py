@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import cast
 
 from fastapi_async_sqlalchemy import db
 from sqlalchemy import ScalarResult
@@ -32,16 +32,8 @@ class AccountRepo(BaseRepo[Account]):
         result = await db.session.execute(query)
         return cast(ScalarResult[Account], result.scalars())
 
-    async def create_account(self, account_data: dict[str, Any]) -> Account:
-        """Create a new account."""
-        account = Account(**account_data)
-        db.session.add(account)
-        await db.session.flush()
-        return account
-
-    async def update(self, account: Account, update_data: dict[str, Any]) -> Account:
-        """Update an account."""
-        for key, value in update_data.items():
-            setattr(account, key, value)
+    async def mark_as_active(self, account: Account) -> Account:
+        """Mark an account as active."""
+        account.status = AccountStatus.active
         await db.session.flush()
         return account

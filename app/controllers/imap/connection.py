@@ -2,14 +2,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from aioimaplib import IMAP4_SSL
 
 from app.models import Account
 from settings import settings
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,6 +22,7 @@ class RateLimiter:
     """Token bucket rate limiter for IMAP connections."""
 
     def __init__(self, rate: float, burst: int | None = None):
+        self._logger = logging.getLogger(__name__)
         self._rate = rate  # tokens per second
         self._burst = burst or int(rate * 2)  # burst capacity
         self._tokens = self._burst
@@ -59,6 +57,7 @@ class ConnectionManager:
     """Manages IMAP connections with pooling and rate limiting."""
 
     def __init__(self) -> None:
+        self._logger = logging.getLogger(__name__)
         self._connections: dict[str, list[ConnectionInfo]] = {}  # provider -> connections
         self._rate_limiters: dict[str, RateLimiter] = {}
         self._connection_locks: dict[str, asyncio.Semaphore] = {}
@@ -69,7 +68,7 @@ class ConnectionManager:
             self._connection_locks[imap_hosts] = asyncio.Semaphore(limit)
             self._rate_limiters[imap_hosts] = RateLimiter(rate=limit - 1, burst=limit)
 
-    async def get_connection(self, account: Account, folder: str | None = None) -> IMAP4_SSL:
+    async def get_connection(self, account: Account, folder: str | None = None) -> IMAP4_SSL | None:
         """Get an IMAP connection for the account, reusing if possible."""
         imap_provider = account.provider_context.get("imap_host")
         if not imap_provider:
@@ -114,7 +113,7 @@ class ConnectionManager:
 
         return None
 
-    async def _create_new_connection(self, account: Account, folder: str | None = None) -> Any:
+    async def _create_new_connection(self, account: Account, folder: str | None = None) -> IMAP4_SSL | None:
         """Create a new IMAP connection."""
         imap_host = account.provider_context.get("imap_host")
         if not imap_host:
@@ -124,7 +123,10 @@ class ConnectionManager:
             # Use async IMAP library
             connection = IMAP4_SSL(host=imap_host, port=993, timeout=settings.imap.timeout)
             await connection.wait_hello_from_server()
-            await connection.login(account.email, account.credentials)
+            response = await connection.login(account.email, account.credentials)
+            if response.result != "OK":
+                self._logger.warning(f"Failed to login to {imap_host} for {account.email}: {response.result}")
+                return None
 
             if folder:
                 await connection.select(folder)
@@ -139,11 +141,11 @@ class ConnectionManager:
                     self._connections[imap_host] = []
                 self._connections[imap_host].append(conn_info)
 
-            logger.info(f"Created new IMAP connection for {account.email}:{folder}")
+            self._logger.info(f"Created new IMAP connection for {account.email}:{folder}")
             return connection
 
         except Exception as e:
-            logger.error(f"Failed to create IMAP connection for {account.email}: {e}")
+            self._logger.error(f"Failed to create IMAP connection for {account.email}: {e}")
             raise
 
     async def _is_connection_alive(self, connection: IMAP4_SSL) -> bool:
@@ -215,16 +217,16 @@ class ConnectionManager:
         try:
             await asyncio.wait_for(connection.logout(), timeout=5)
             if connection_found:
-                logger.debug(f"Closed connection for {account.email}")
+                self._logger.debug(f"Closed connection for {account.email}")
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout closing connection for {account.email}, forcing close")
+            self._logger.warning(f"Timeout closing connection for {account.email}, forcing close")
             # Force close the connection if logout hangs
             try:
                 connection.close()
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"Error closing connection for {account.email}: {e}")
+            self._logger.warning(f"Error closing connection for {account.email}: {e}")
 
     async def cleanup_idle_connections(self, max_idle_time: int = 600) -> None:
         """Clean up connections that have been idle too long."""
@@ -242,9 +244,9 @@ class ConnectionManager:
         for connection, account in connections_to_close:
             try:
                 await self.close_connection(connection, account)
-                logger.info(f"Closed idle connection for {account.email}")
+                self._logger.info(f"Closed idle connection for {account.email}")
             except Exception as e:
-                logger.warning(f"Error closing idle connection for {account.email}: {e}")
+                self._logger.warning(f"Error closing idle connection for {account.email}: {e}")
 
     async def get_connection_stats(self) -> dict[str, dict[str, int]]:
         """Get statistics about current connections."""
@@ -275,8 +277,8 @@ class ConnectionManager:
             try:
                 await asyncio.wait_for(self.close_connection(connection, account), timeout=10)
             except asyncio.TimeoutError:
-                logger.warning(f"Timeout closing connection for {account.email}, skipping")
+                self._logger.warning(f"Timeout closing connection for {account.email}, skipping")
             except Exception as e:
-                logger.warning(f"Error closing connection: {e}")
+                self._logger.warning(f"Error closing connection: {e}")
 
-        logger.info("All IMAP connections closed")
+        self._logger.info("All IMAP connections closed")
