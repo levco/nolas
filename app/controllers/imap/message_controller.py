@@ -2,6 +2,7 @@ import email
 import logging
 import urllib.parse
 from email.message import Message as PythonEmailMessage
+from imaplib import IMAP4_SSL
 from typing import Any
 
 from app.api.models.messages import Message
@@ -66,7 +67,7 @@ class MessageController:
         connection = None
         try:
             # Get connection for this folder
-            connection = await self._connection_manager.get_connection(account, folder)
+            connection = await self._connection_manager.get_connection_or_fail(account, folder)
 
             if uid is not None:
                 raw_message = await self._fetch_message_from_folder(connection, uid, folder)
@@ -110,7 +111,7 @@ class MessageController:
         decoded_message_id = urllib.parse.unquote(message_id)
         return decoded_message_id if decoded_message_id.startswith("<") else f"<{decoded_message_id}>"
 
-    async def _search_message_in_folder(self, connection: Any, search_message_id: str, folder: str) -> int | None:
+    async def _search_message_in_folder(self, connection: IMAP4_SSL, search_message_id: str, folder: str) -> int | None:
         """
         Search for a message by Message-ID in a specific folder.
 
@@ -124,7 +125,7 @@ class MessageController:
         """
         try:
             search_criteria = f'HEADER Message-ID "{search_message_id}"'
-            result = await connection.search(search_criteria)
+            result = await connection.search(search_criteria)  # type: ignore
 
             if result and result[1] and result[1][0]:
                 # Parse the response
@@ -196,7 +197,9 @@ class MessageController:
 
         return raw_message
 
-    async def _fetch_message_from_folder(self, connection: Any, uid: int, folder: str) -> PythonEmailMessage | None:
+    async def _fetch_message_from_folder(
+        self, connection: IMAP4_SSL, uid: int, folder: str
+    ) -> PythonEmailMessage | None:
         """
         Fetch and parse a message from a folder given its UID.
 
@@ -211,7 +214,7 @@ class MessageController:
         """
         try:
             # Fetch the message
-            fetch_result = await connection.fetch(uid, "(RFC822)")
+            fetch_result = await connection.fetch(str(uid), "(RFC822)")  # type: ignore
 
             # Extract raw message bytes
             raw_message = self._extract_raw_message_from_fetch_result(fetch_result, uid, folder)
@@ -242,7 +245,7 @@ class MessageController:
         messages: list[Message] = []
 
         try:
-            connection = await self._connection_manager.get_connection(account, folder)
+            connection = await self._connection_manager.get_connection_or_fail(account, folder)
 
             # Get all message UIDs
             result = await connection.search("ALL")

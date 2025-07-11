@@ -259,7 +259,7 @@ async def process_authorization(
             code=auth_code,
             account=account,
         )
-        await auth_request_repo.add(auth_request, commit=True)
+        await auth_request_repo.add(auth_request)
 
         redirect_params = {"code": auth_code, "state": state, "source": "nolas"}
         redirect_url = f"{redirect_uri}?{urlencode(redirect_params)}"
@@ -325,7 +325,6 @@ async def token_exchange(
 
         await auth_code_repo.mark_as_used(auth_code)
         await account_repo.mark_as_active(auth_code.account)
-        await auth_code_repo.commit()
 
         return OAuth2TokenResponse(request_id=str(uuid.uuid4()), grant_id=str(auth_code.account.uuid))
 

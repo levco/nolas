@@ -68,6 +68,13 @@ class ConnectionManager:
             self._connection_locks[imap_hosts] = asyncio.Semaphore(limit)
             self._rate_limiters[imap_hosts] = RateLimiter(rate=limit - 1, burst=limit)
 
+    async def get_connection_or_fail(self, account: Account, folder: str | None = None) -> IMAP4_SSL:
+        """Get an IMAP connection for the account, reusing if possible."""
+        connection = await self.get_connection(account, folder)
+        if not connection:
+            raise ValueError("Failed to get IMAP connection")
+        return connection
+
     async def get_connection(self, account: Account, folder: str | None = None) -> IMAP4_SSL | None:
         """Get an IMAP connection for the account, reusing if possible."""
         imap_provider = account.provider_context.get("imap_host")

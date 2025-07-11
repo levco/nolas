@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
+from app.api.middlewares.auto_commit import AutoCommitMiddleware
 from app.api.routes import api_router
 from app.container import get_wire_container
 from app.exceptions import BaseError, ErrorType
@@ -118,6 +119,9 @@ def create_app() -> FastAPI:
 
     # Setup error handlers
     _setup_error_handlers(app)
+
+    # Add auto-commit middleware FIRST (it will run LAST, after SQLAlchemy middleware creates the session)
+    app.add_middleware(AutoCommitMiddleware)
 
     # Add SQLAlchemy middleware for database session management
     database_url = f"{settings.database.async_host}/{settings.database.name}"

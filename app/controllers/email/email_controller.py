@@ -49,7 +49,6 @@ class EmailController:
                         folder=message.folders[0],
                         uid=message_result.uid,
                     ),
-                    commit=True,
                 )
             elif folder != message.folders[0] or uid != message_result.uid:
                 await self._email_repo.update(email, {"folder": message.folders[0], "uid": message_result.uid})
@@ -97,7 +96,6 @@ class EmailController:
                     thread_id=send_message_result.thread_id,
                     folder=send_message_result.folder,
                 ),
-                commit=True,
             )
 
         return send_message_result
