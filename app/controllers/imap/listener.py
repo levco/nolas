@@ -184,25 +184,14 @@ class IMAPListener:
         while not self._shutdown_event.is_set():
             connection: IMAP4_SSL | None = None
             try:
-                # Get fresh connection for this poll
                 connection = await self._connection_manager.get_connection_or_fail(account, folder)
-
-                # Check for new messages
+                search_response = await connection.search("ALL")
+                all_uids = self._parse_search_response(search_response)
                 last_seen_uid = await self._get_last_seen_uid(account.id, folder)
-                status_response = await connection.status(folder, "(UIDNEXT)")
-                print(f"UIDNEXT for {account.email}:{folder} is {status_response}")
-                uidnext = self._parse_uidnext(status_response)
-
-                if uidnext is None:
-                    self._logger.warning(f"Could not get UIDNEXT for {account.email}:{folder}")
-                    uidnext = last_seen_uid + 1
-
-                # Process any new messages
-                if last_seen_uid < uidnext - 1:
-                    self._logger.info(
-                        f"New messages found for {account.email}:{folder} (UIDs {last_seen_uid + 1}:{uidnext - 1})"
-                    )
-                    await self._process_new_messages(connection, account, folder, last_seen_uid)
+                new_uids = [uid for uid in all_uids if uid > last_seen_uid]
+                if new_uids:
+                    self._logger.info(f"Found {len(new_uids)} new messages for {account.email}:{folder}: {new_uids}")
+                    await self._process_new_messages_by_uids(connection, account, folder, new_uids)
                 else:
                     self._logger.debug(f"No new messages for {account.email}:{folder}")
 
@@ -210,15 +199,14 @@ class IMAPListener:
                 await self._record_connection_health(account.id, folder, True)
                 consecutive_failures = 0
 
-                # Close connection immediately (no persistent connections needed)
                 await self._connection_manager.close_connection(connection, account)
                 connection = None
 
                 # Wait for next poll interval, checking for shutdown frequently
-                for _ in range(poll_interval * 10):  # Check every 0.1 seconds
+                for _ in range(poll_interval * 10):
                     if self._shutdown_event.is_set():
                         return
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.5)
 
             except asyncio.CancelledError:
                 self._logger.info(f"Polling cancelled for {account.email}:{folder}")
@@ -290,54 +278,24 @@ class IMAPListener:
         except Exception:
             self._logger.exception("Failed to record connection health")
 
-    def _parse_uidnext(self, status_response: Response) -> int | None:
-        """Parse UIDNEXT from IMAP STATUS response."""
-        try:
-            for line in status_response.lines:
-                if b"UIDNEXT" in line:
-                    # Example line: b'"Archive" (UIDNEXT 1)'
-                    # Find the part inside parentheses
-                    start = line.find(b"(")
-                    end = line.find(b")", start)
-                    if start != -1 and end != -1:
-                        inside = line[start + 1 : end]
-                        # inside: b'UIDNEXT 1'
-                        parts = inside.split()
-                        for i, part in enumerate(parts):
-                            if part == b"UIDNEXT" and i + 1 < len(parts):
-                                try:
-                                    return int(parts[i + 1])
-                                except Exception:
-                                    continue
-            return None
-        except Exception:
-            return None
-
-    async def _process_new_messages(
-        self, connection: IMAP4_SSL, account: Account, folder: str, last_seen_uid: int
+    async def _process_new_messages_by_uids(
+        self, connection: IMAP4_SSL, account: Account, folder: str, new_uids: list[int]
     ) -> None:
-        """Process new messages in the folder."""
+        """Process new messages in the folder based on a list of UIDs."""
         try:
-            # Search for new messages
-            print(f"Searching for new messages for {account.email}:{folder} with last seen UID {last_seen_uid + 1}")
-            search_response = await connection.search(f"UID {last_seen_uid + 1}:*")
-            print(f"Search response for {account.email}:{folder} is {search_response}")
-            uids = self._parse_search_response(search_response)
+            # Fetch message data for each UID
+            fetch_response = await connection.fetch(",".join(map(str, new_uids)), "RFC822")
+            messages = self._parse_fetch_response(fetch_response)
 
-            if uids:
-                # Fetch message data
-                fetch_response = await connection.fetch(",".join(map(str, uids)), "RFC822")
-                messages = self._parse_fetch_response(fetch_response)
+            for uid, message_bytes in messages.items():
+                raw_message = email.message_from_bytes(message_bytes)
+                nylas_message = await self._email_processor.process_email(account, folder, uid, raw_message)
 
-                for uid, message_bytes in messages.items():
-                    raw_message = email.message_from_bytes(message_bytes)
-                    nylas_message = await self._email_processor.process_email(account, folder, uid, raw_message)
+                # Update UID tracking
+                await self._update_last_seen_uid(account.id, folder, uid)
+                await self._upsert_cache(account, raw_message, folder, uid, nylas_message.thread_id)
 
-                    # Update UID tracking
-                    await self._update_last_seen_uid(account.id, folder, uid)
-                    await self._upsert_cache(account, raw_message, folder, uid, nylas_message.thread_id)
-
-            self._logger.info(f"Processed new messages for {account.email}:{folder}")
+            self._logger.info(f"Processed {len(new_uids)} new messages for {account.email}:{folder}")
             await self._uid_tracking_repo.commit()
 
         except Exception as e:

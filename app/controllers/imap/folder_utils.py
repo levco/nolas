@@ -44,7 +44,7 @@ class FolderUtils:
                         folder_name = parts[-2].decode("utf-8")
                         # TODO: Allow selecting what folders to include in a user?
                         # Ignore these folders by default.
-                        if folder_name.lower() in ["drafts", "junk", "archive", "trash"]:
+                        if folder_name.lower() in ["drafts", "junk", "archive", "trash", "inbox"]:
                             continue
 
                         # Skip empty folder names
