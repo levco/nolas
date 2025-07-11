@@ -3,7 +3,7 @@
 Scalable IMAP Email Tracker
 
 A high-performance, async-based IMAP email tracker that can scale to 1000+ email accounts
-using connection pooling, rate limiting, and distributed worker processes.
+using simple polling, rate limiting, and distributed worker processes.
 
 Usage:
     python main.py [--mode MODE] [--migrate] [--workers N]
@@ -17,6 +17,7 @@ Environment Variables:
     DATABASE_URL: PostgreSQL connection string
     NUM_WORKERS: Number of worker processes
     WEBHOOK_TIMEOUT: Webhook timeout in seconds
+    IMAP_POLL_INTERVAL: Polling interval in seconds (default: 60)
 """
 
 import argparse

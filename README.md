@@ -4,9 +4,9 @@ A high-performance, async-based headless email client that is Nylas-API compatib
 
 ## 🚀 Key Features
 
-- **Massive Scale**: Handle 1000+ email accounts with 10+ folders each
+- **Massive Scale**: Handle 1000+ email accounts with simple polling
 - **Async Architecture**: Uses asyncio for efficient I/O operations
-- **Connection Pooling**: Smart IMAP connection management with rate limiting
+- **Simple Polling**: Reliable 60-second polling instead of complex IDLE sessions
 - **Distributed Workers**: Horizontal scaling with multiple worker processes
 - **Database-Driven**: PostgreSQL for reliable state management
 - **Webhook Delivery**: Reliable webhook delivery with retry logic

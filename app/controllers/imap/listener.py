@@ -1,7 +1,7 @@
 import asyncio
 import email
 import logging
-import time
+import random
 from email.message import Message
 
 from aioimaplib import IMAP4_SSL, Response
@@ -18,7 +18,7 @@ from settings import settings
 
 
 class IMAPListener:
-    """Async IMAP listener that monitors folders for new emails."""
+    """Async IMAP listener that polls folders for new emails."""
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class IMAPListener:
                     self._active_listeners[listener_key] = task
 
                 tasks.append(task)
-                self._logger.info(f"Started listener for {account.email}:{folder}")
+                self._logger.info(f"Started polling for {account.email}:{folder}")
 
             return tasks
 
@@ -110,7 +110,7 @@ class IMAPListener:
         """Stop all active listeners."""
         self._shutdown_event.set()
 
-        tasks_to_cancel = []
+        tasks_to_cancel: list[asyncio.Task[None]] = []
         async with self._listener_lock:
             for task in self._active_listeners.values():
                 if not task.done():
@@ -170,90 +170,71 @@ class IMAPListener:
             }
 
     async def _listen_to_folder(self, account: Account, folder: str) -> None:
-        """Listen to a specific folder for new emails."""
-        connection = None
+        """Poll a specific folder for new emails."""
+
         consecutive_failures = 0
-        consecutive_idle_failures = 0
         max_failures = 5
-        max_idle_failures = 3
+        poll_interval = settings.imap.poll_interval
+
+        # Add jitter to prevent thundering herd - spread polls across the interval
+        jitter = random.uniform(0, min(settings.imap.poll_jitter_max, poll_interval * 0.5))
+        self._logger.debug(f"Starting polling for {account.email}:{folder} with {jitter:.1f}s jitter")
+        await asyncio.sleep(jitter)
 
         while not self._shutdown_event.is_set():
+            connection: IMAP4_SSL | None = None
             try:
-                # Get connection for this folder
-                connection = await self._connection_manager.get_connection(account, folder)
+                # Get fresh connection for this poll
+                connection = await self._connection_manager.get_connection_or_fail(account, folder)
 
-                # Initialize UID tracking
+                # Check for new messages
                 last_seen_uid = await self._get_last_seen_uid(account.id, folder)
                 status_response = await connection.status(folder, "(UIDNEXT)")
+                print(f"UIDNEXT for {account.email}:{folder} is {status_response}")
                 uidnext = self._parse_uidnext(status_response)
 
                 if uidnext is None:
                     self._logger.warning(f"Could not get UIDNEXT for {account.email}:{folder}")
                     uidnext = last_seen_uid + 1
 
-                # Process any existing new messages
+                # Process any new messages
                 if last_seen_uid < uidnext - 1:
+                    self._logger.info(
+                        f"New messages found for {account.email}:{folder} (UIDs {last_seen_uid + 1}:{uidnext - 1})"
+                    )
                     await self._process_new_messages(connection, account, folder, last_seen_uid)
+                else:
+                    self._logger.debug(f"No new messages for {account.email}:{folder}")
 
-                # Record successful connection
+                # Record successful poll
                 await self._record_connection_health(account.id, folder, True)
                 consecutive_failures = 0
 
-                # Start IDLE monitoring with retry logic
-                idle_retry_count = 0
-                max_idle_retries = 3
+                # Close connection immediately (no persistent connections needed)
+                await self._connection_manager.close_connection(connection, account)
+                connection = None
 
-                while not self._shutdown_event.is_set() and idle_retry_count < max_idle_retries:
-                    try:
-                        await self._idle_monitor(connection, account, folder)
-                        # If we get here, IDLE monitoring returned normally (e.g., for connection refresh)
-                        consecutive_idle_failures = 0
-                        break
-                    except Exception as idle_error:
-                        idle_retry_count += 1
-                        consecutive_idle_failures += 1
-
-                        self._logger.warning(
-                            f"IDLE monitoring failed for {account.email}:{folder} "
-                            f"(attempt {idle_retry_count}/{max_idle_retries}): {idle_error}"
-                        )
-
-                        # If this is an IDLE-specific error and we haven't exceeded max retries,
-                        # try to restart IDLE without closing the connection
-                        if idle_retry_count < max_idle_retries:
-                            await asyncio.sleep(min(5 * idle_retry_count, 30))  # Progressive backoff
-                            continue
-                        else:
-                            # Too many IDLE failures, treat as connection failure
-                            raise idle_error
-
-                # If we've had too many consecutive IDLE failures, close connection and restart
-                if consecutive_idle_failures >= max_idle_failures:
-                    self._logger.error(
-                        f"Too many consecutive IDLE failures for {account.email}:{folder}, "
-                        "closing connection and restarting"
-                    )
-                    if connection:
-                        await self._connection_manager.close_connection(connection, account)
-                        connection = None
-                    consecutive_idle_failures = 0
-                    await asyncio.sleep(30)  # Wait before retrying
+                # Wait for next poll interval, checking for shutdown frequently
+                for _ in range(poll_interval * 10):  # Check every 0.1 seconds
+                    if self._shutdown_event.is_set():
+                        return
+                    await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
-                self._logger.info(f"Listener cancelled for {account.email}:{folder}")
+                self._logger.info(f"Polling cancelled for {account.email}:{folder}")
                 break
 
             except Exception as e:
                 consecutive_failures += 1
                 error_msg = str(e)
 
-                self._logger.exception(
-                    f"Error in listener for {account.email}:{folder} (failure {consecutive_failures}): {error_msg}"
+                self._logger.warning(
+                    f"Polling error for {account.email}:{folder} (failure {consecutive_failures}): {error_msg}"
                 )
 
                 await self._record_connection_health(account.id, folder, False, error_msg)
 
-                # Close problematic connection
+                # Close connection on error
                 if connection:
                     try:
                         await self._connection_manager.close_connection(connection, account)
@@ -261,27 +242,26 @@ class IMAPListener:
                         pass
                     connection = None
 
-                # Exponential backoff with max failures
+                # Check if we should stop this folder
                 if consecutive_failures >= max_failures:
-                    self._logger.error(f"Max failures reached for {account.email}:{folder}, stopping listener")
+                    self._logger.error(f"Max failures reached for {account.email}:{folder}, stopping polling")
                     break
 
-                backoff_time = min(300, 15 * (2**consecutive_failures))  # Max 5 minutes
-                await asyncio.sleep(backoff_time)
+                # Exponential backoff for errors, but not too long
+                backoff_time = min(120, 10 * consecutive_failures)  # Max 2 minutes
+                self._logger.debug(f"Backing off for {backoff_time}s after error")
 
-            finally:
-                if connection:
-                    try:
-                        await self._connection_manager.release_connection(connection, account)
-                    except Exception:
-                        pass
+                for _ in range(int(backoff_time * 10)):  # Check shutdown every 0.1 seconds
+                    if self._shutdown_event.is_set():
+                        return
+                    await asyncio.sleep(0.1)
 
         # Clean up
         listener_key = f"{account.email}:{folder}"
         async with self._listener_lock:
             self._active_listeners.pop(listener_key, None)
 
-        self._logger.info(f"Stopped listener for {account.email}:{folder}")
+        self._logger.info(f"Stopped polling for {account.email}:{folder}")
 
     async def _get_last_seen_uid(self, account_id: int, folder: str) -> int:
         """Get the last seen UID for an account/folder combination using repository."""
@@ -333,183 +313,15 @@ class IMAPListener:
         except Exception:
             return None
 
-    async def _idle_monitor(self, connection: IMAP4_SSL, account: Account, folder: str) -> None:
-        """Monitor folder using IMAP IDLE."""
-        try:
-            # Mark connection as idle in manager
-            await self._connection_manager.start_idle(connection, account)
-
-            idle_start_time = time.time()
-            max_idle_time = settings.imap.idle_timeout
-
-            while not self._shutdown_event.is_set():
-                idle_task = None
-                try:
-                    # Check for shutdown at the beginning of each iteration
-                    if self._shutdown_event.is_set():
-                        self._logger.debug(f"Shutdown requested for {account.email}:{folder}, exiting IDLE monitor")
-                        return
-
-                    # Check if we need to refresh the connection
-                    if time.time() - idle_start_time > max_idle_time:
-                        self._logger.info(f"Refreshing IDLE connection for {account.email}:{folder}")
-                        idle_start_time = time.time()
-                        # Connection refresh happens in the outer loop, just continue here
-                        return
-
-                    # Start IDLE session
-                    self._logger.debug(f"Starting IDLE session for {account.email}:{folder}")
-                    idle_task = await connection.idle_start(timeout=30)
-
-                    # Monitor for server push notifications
-                    idle_timeout_count = 0
-                    max_idle_timeouts = 5  # Allow up to 5 consecutive timeouts before restarting IDLE
-
-                    while not self._shutdown_event.is_set():
-                        try:
-                            # Check if connection has pending data
-                            if not connection.has_pending_idle():
-                                self._logger.debug(
-                                    f"No pending IDLE data for {account.email}:{folder}, checking again..."
-                                )
-                                # Use shorter sleep and check for shutdown more frequently
-                                for _ in range(10):  # Check shutdown every 0.1 seconds for 1 second total
-                                    if self._shutdown_event.is_set():
-                                        return
-                                    await asyncio.sleep(0.1)
-                                continue
-
-                            # Wait for server push notification with shorter timeout for more responsive shutdown
-                            response = await asyncio.wait_for(connection.wait_server_push(), timeout=30)
-                            idle_timeout_count = 0  # Reset timeout counter on successful response
-
-                            # Check if it's an EXISTS response (new message)
-                            exists_found = False
-                            if isinstance(response, list):
-                                exists_found = any(b"EXISTS" in item for item in response if isinstance(item, bytes))
-                                self._logger.debug(f"IDLE response (list) for {account.email}:{folder}: {response!r}")
-                            elif isinstance(response, bytes):
-                                exists_found = b"EXISTS" in response
-                                self._logger.debug(f"IDLE response (bytes) for {account.email}:{folder}: {response!r}")
-
-                            if exists_found:
-                                self._logger.info(f"New message detected in {account.email}:{folder}")
-
-                                # Stop IDLE session
-                                if idle_task:
-                                    connection.idle_done()
-                                    await asyncio.wait_for(idle_task, timeout=10)
-                                    idle_task = None
-
-                                # Process new messages
-                                last_seen_uid = await self._get_last_seen_uid(account.id, folder)
-                                await self._process_new_messages(connection, account, folder, last_seen_uid)
-
-                                # Break to restart IDLE session
-                                break
-
-                        except asyncio.TimeoutError:
-                            # Check for shutdown before handling timeout
-                            if self._shutdown_event.is_set():
-                                return
-
-                            # Timeout waiting for server push
-                            idle_timeout_count += 1
-                            self._logger.debug(
-                                f"IDLE timeout {idle_timeout_count} for {account.email}:{folder}, continuing..."
-                            )
-
-                            # If we've had too many consecutive timeouts, restart IDLE session
-                            if idle_timeout_count >= max_idle_timeouts:
-                                self._logger.debug(
-                                    f"Too many IDLE timeouts for {account.email}:{folder}, restarting IDLE session"
-                                )
-                                break
-
-                            continue
-
-                        except Exception as e:
-                            self._logger.error(f"Error waiting for server push in {account.email}:{folder}: {e}")
-                            break
-
-                    # Clean up IDLE session if it exited normally
-                    if idle_task:
-                        self._logger.debug(f"Cleaning up IDLE session for {account.email}:{folder}")
-                        try:
-                            connection.idle_done()
-                            await asyncio.wait_for(idle_task, timeout=5)  # Shorter timeout for faster shutdown
-                        except asyncio.TimeoutError:
-                            self._logger.warning(
-                                f"Timeout cleaning up IDLE session for {account.email}:{folder}, forcing cleanup"
-                            )
-                            # Force cancel the idle task if it's stuck
-                            if idle_task and not idle_task.done():
-                                idle_task.cancel()
-                                try:
-                                    await asyncio.wait_for(idle_task, timeout=2)
-                                except asyncio.TimeoutError:
-                                    self._logger.error(f"Failed to force cancel IDLE task for {account.email}:{folder}")
-                        except Exception as e:
-                            self._logger.warning(f"Error cleaning up IDLE session for {account.email}:{folder}: {e}")
-                        finally:
-                            idle_task = None
-
-                except Exception as e:
-                    self._logger.error(f"IDLE session error for {account.email}:{folder}: {e}")
-                    if idle_task:
-                        try:
-                            connection.idle_done()
-                            await asyncio.wait_for(idle_task, timeout=2)  # Shorter timeout for faster shutdown
-                        except asyncio.TimeoutError:
-                            self._logger.warning(
-                                f"Timeout during error cleanup for {account.email}:{folder}, force cancelling"
-                            )
-                            idle_task.cancel()
-                            try:
-                                await asyncio.wait_for(idle_task, timeout=1)
-                            except asyncio.TimeoutError:
-                                pass
-                        except Exception:
-                            pass
-                        idle_task = None
-
-                    # Short delay before retrying, but check for shutdown
-                    for _ in range(50):  # Check shutdown every 0.1 seconds for 5 seconds total
-                        if self._shutdown_event.is_set():
-                            return
-                        await asyncio.sleep(0.1)
-
-        finally:
-            try:
-                # Force cleanup any remaining idle task
-                if "idle_task" in locals() and idle_task and not idle_task.done():
-                    self._logger.debug(f"Force cleaning up remaining IDLE task for {account.email}:{folder}")
-                    try:
-                        connection.idle_done()
-                        await asyncio.wait_for(idle_task, timeout=2)
-                    except asyncio.TimeoutError:
-                        idle_task.cancel()
-                        try:
-                            await asyncio.wait_for(idle_task, timeout=1)
-                        except asyncio.TimeoutError:
-                            pass
-                    except Exception:
-                        pass
-
-                await asyncio.wait_for(self._connection_manager.stop_idle(connection, account), timeout=5)
-                self._logger.info(f"IDLE monitoring stopped for {account.email}:{folder}")
-            except asyncio.TimeoutError:
-                self._logger.warning(f"Timeout stopping IDLE for {account.email}:{folder}")
-            except Exception:
-                pass
-
     async def _process_new_messages(
         self, connection: IMAP4_SSL, account: Account, folder: str, last_seen_uid: int
     ) -> None:
         """Process new messages in the folder."""
         try:
             # Search for new messages
+            print(f"Searching for new messages for {account.email}:{folder} with last seen UID {last_seen_uid + 1}")
             search_response = await connection.search(f"UID {last_seen_uid + 1}:*")
+            print(f"Search response for {account.email}:{folder} is {search_response}")
             uids = self._parse_search_response(search_response)
 
             if uids:

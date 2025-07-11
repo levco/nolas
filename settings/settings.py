@@ -28,6 +28,10 @@ class IMAPSettings(BaseSettings):
     timeout: int = Field(alias="IMAP_TIMEOUT", default=300)
     idle_timeout: int = Field(alias="IMAP_IDLE_TIMEOUT", default=1740)  # 29 minutes (RFC requirement)
 
+    # Polling settings - much simpler than IDLE
+    poll_interval: int = Field(alias="IMAP_POLL_INTERVAL", default=60)  # Poll every 60 seconds
+    poll_jitter_max: int = Field(alias="IMAP_POLL_JITTER", default=30)  # Max jitter to spread load
+
 
 class WebhookSettings(BaseSettings):
     max_retries: int = Field(alias="WEBHOOK_MAX_RETRIES", default=3)

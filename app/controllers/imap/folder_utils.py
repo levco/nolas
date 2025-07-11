@@ -26,7 +26,7 @@ class FolderUtils:
             List of folder names
         """
         try:
-            connection = await connection_manager.get_connection(account)
+            connection = await connection_manager.get_connection_or_fail(account)
 
             response = await connection.list('""', "*")
             folders = []
