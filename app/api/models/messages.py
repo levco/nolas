@@ -71,6 +71,14 @@ class MessageResponse(BaseModel):
     data: Message
 
 
+class MessageListResponse(BaseModel):
+    """Response model for listing messages."""
+
+    request_id: str
+    data: list[Message]
+    next_cursor: str | None = None
+
+
 class SendMessageData(BaseMessage):
     """Send message model."""
 
@@ -99,11 +107,3 @@ class SendMessageResponse(BaseModel):
     request_id: str
     grant_id: str
     data: SendMessageData
-
-
-class MessageListResponse(BaseModel):
-    """Response model for listing messages."""
-
-    request_id: str
-    data: list[Message]
-    next_cursor: str | None = None

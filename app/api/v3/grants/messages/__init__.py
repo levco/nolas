@@ -72,14 +72,16 @@ async def get_message(
             )
 
         return MessageResponse(request_id=str(uuid.uuid4()), data=message_result.message)
-
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to fetch message {message_id} from IMAP")
         return create_error_response(
             error_type="provider_error",
             message="Failed to fetch message",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            provider_error={"error": str(e)},
+            provider_error={
+                "code": "InternalError",
+                "message": "An unexpected error occurred when fetching the message",
+            },
         )
 
 
@@ -109,9 +111,8 @@ async def list_messages(
         return error_response
     assert account is not None  # account is guaranteed to be not None when error_response is None
 
-    return create_error_response(
-        error_type="unsupported_operation_error", message="Not implemented", status_code=status.HTTP_501_NOT_IMPLEMENTED
-    )
+    # TODO: Implement message listing
+    return MessageListResponse(request_id=str(uuid.uuid4()), data=[], next_cursor=None)
 
 
 @router.post(
@@ -169,15 +170,21 @@ async def send_message(
             error_type="invalid_request_error",
             message=f"Invalid parameter: {e.parameter}",
             status_code=status.HTTP_400_BAD_REQUEST,
-            provider_error={"parameter": e.parameter, "value": str(e.value)},
+            provider_error={
+                "code": "InvalidParameterError",
+                "message": f"Invalid parameter: {e.parameter}",
+            },
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to send message")
         return create_error_response(
             error_type="provider_error",
             message="An unexpected error occurred when sending the message",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            provider_error={"error": str(e)},
+            provider_error={
+                "code": "InternalError",
+                "message": "An unexpected error occurred when sending the message",
+            },
         )
 
 
