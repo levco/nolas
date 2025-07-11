@@ -4,107 +4,217 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Authorize IMAP Access</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        * {
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
-            max-width: 400px;
-            margin: 50px auto;
-            padding: 20px;
-            background-color: #f5f5f5;
+            font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #003b39, #3eb780 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+        
         .form-container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1), 0 8px 16px rgba(0, 0, 0, 0.08);
+            padding: 40px;
+            width: 100%;
+            max-width: 480px;
+            margin: 20px;
         }
-        h1 {
-            color: #333;
+        
+        .app-info {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 32px;
+            padding: 16px 20px;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
         }
+        
+        .app-info strong {
+            color: #1e293b;
+            font-weight: 600;
+            font-size: 15px;
+        }
+        
+        .app-info-text {
+            color: #64748b;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        
+        h1 {
+            color: #0f172a;
+            font-size: 28px;
+            font-weight: 700;
+            text-align: center;
+            margin: 0 0 32px 0;
+            letter-spacing: -0.02em;
+        }
+        
         .form-group {
             margin-bottom: 20px;
         }
+        
         label {
             display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #555;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #374151;
+            font-size: 14px;
+            letter-spacing: -0.01em;
         }
-        input[type="text"], input[type="password"], input[type="email"], input[type="number"] {
+        
+        input[type="text"], 
+        input[type="password"], 
+        input[type="email"], 
+        input[type="number"] {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            padding: 12px 16px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
             font-size: 16px;
-            box-sizing: border-box;
+            font-family: 'IBM Plex Sans', sans-serif;
+            transition: all 0.2s ease;
+            background: #ffffff;
+            color: #111827;
         }
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
+        
+        input[type="text"]:focus, 
+        input[type="password"]:focus, 
+        input[type="email"]:focus, 
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
         }
-        .checkbox-group input[type="checkbox"] {
-            margin-right: 8px;
+        
+        input[type="text"]::placeholder, 
+        input[type="password"]::placeholder, 
+        input[type="email"]::placeholder, 
+        input[type="number"]::placeholder {
+            color: #9ca3af;
         }
+        
         .btn {
             width: 100%;
-            padding: 12px;
-            background-color: #007bff;
+            padding: 14px 20px;
+            background: #003b39;
             color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 8px;
             font-size: 16px;
+            font-weight: 600;
+            font-family: 'IBM Plex Sans', sans-serif;
             cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: -0.01em;
+            margin-top: 8px;
         }
+        
         .btn:hover {
-            background-color: #0056b3;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3);
         }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
         .btn:disabled {
-            background-color: #ccc;
+            background: #9ca3af;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
-        .error {
-            color: #dc3545;
-            margin-bottom: 20px;
-            padding: 10px;
-            background-color: #f8d7da;
-            border-radius: 4px;
-        }
-        .app-info {
-            text-align: center;
-            margin-bottom: 30px;
-            padding: 15px;
-            background-color: #e9ecef;
-            border-radius: 4px;
-        }
+        
         .alert {
-            padding: 12px;
+            padding: 12px 16px;
             margin-bottom: 20px;
-            border-radius: 4px;
+            border-radius: 8px;
             display: none;
+            font-size: 14px;
+            font-weight: 500;
         }
+        
         .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
         }
+        
         .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: #f0fdf4;
+            color: #166534;
+            border: 1px solid #bbf7d0;
         }
+        
         .loading {
-            opacity: 0.6;
+            opacity: 0.7;
             pointer-events: none;
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 16px;
+        }
+        
+        .form-row .form-group {
+            flex: 1;
+        }
+        
+        .divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #e2e8f0, transparent);
+            margin: 32px 0;
+        }
+        
+        .server-section {
+            margin-top: 24px;
+        }
+        
+        .section-title {
+            color: #374151;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        
+        @media (max-width: 640px) {
+            .form-container {
+                padding: 24px;
+                margin: 12px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            .form-row {
+                flex-direction: column;
+                gap: 0;
+            }
         }
     </style>
 </head>
 <body>
     <div class="form-container">
         <div class="app-info">
-            <strong>{{ app_name }}</strong> is requesting access to your Email account
+            <strong>{{ app_name }}</strong>
+            <div class="app-info-text">is requesting access to your email account.</div>
         </div>
         
         <h1>Connect Your Email</h1>
@@ -113,12 +223,6 @@
         <div id="alert" class="alert">
             <span id="alert-message"></span>
         </div>
-        
-        {% if error %}
-        <div class="alert alert-error" style="display: block;">
-            {{ error }}
-        </div>
-        {% endif %}
         
         <form id="auth-form" method="post" action="/v3/connect/process">
             <!-- Hidden OAuth2 parameters -->
@@ -130,33 +234,44 @@
             {% endif %}
             
             <div class="form-group">
-                <label for="email">Email Address:</label>
-                <input type="email" id="email" name="email" required>
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" placeholder="you@example.com" required
+                    {% if login_hint %} value="{{ login_hint }}" {% endif %}>
             </div>
             
             <div class="form-group">
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required>
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="Your email password" required>
             </div>
             
-            <div class="form-group">
-                <label for="imap_host">IMAP Server:</label>
-                <input type="text" id="imap_host" name="imap_host" placeholder="imap.gmail.com" required>
-            </div>
+            <div class="divider"></div>
             
-            <div class="form-group">
-                <label for="imap_port">IMAP Port:</label>
-                <input type="number" id="imap_port" name="imap_port" value="993" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="smtp_host">SMTP Server:</label>
-                <input type="text" id="smtp_host" name="smtp_host" placeholder="smtp.gmail.com" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="smtp_port">SMTP Port:</label>
-                <input type="number" id="smtp_port" name="smtp_port" value="465" required>
+            <div class="server-section">
+                <div class="section-title">Server Configuration</div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="imap_host">IMAP Server</label>
+                        <input type="text" id="imap_host" name="imap_host" placeholder="imap.server.com" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="imap_port">IMAP Port</label>
+                        <input type="number" id="imap_port" name="imap_port" value="993" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="smtp_host">SMTP Server</label>
+                        <input type="text" id="smtp_host" name="smtp_host" placeholder="smtp.server.com" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="smtp_port">SMTP Port</label>
+                        <input type="number" id="smtp_port" name="smtp_port" value="465" required>
+                    </div>
+                </div>
             </div>
             
             <button type="submit" class="btn" id="submit-btn">Authorize Access</button>

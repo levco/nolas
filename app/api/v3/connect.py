@@ -103,7 +103,7 @@ async def show_auth_form(
     state: str = Query(..., description="State parameter for CSRF protection"),
     scope: str = Query(None, description="Requested scope"),
     response_type: str = Query("code", description="Response type (must be 'code')"),
-    error: str = Query(None, description="Error message to display"),
+    login_hint: str = Query(None, description="Hint to display in the email input"),
     app_repo: AppRepo = Depends(Provide[ApplicationContainer.repos.app]),
 ) -> HTMLResponse:
     """
@@ -144,7 +144,7 @@ async def show_auth_form(
                 "redirect_uri": redirect_uri,
                 "state": state,
                 "scope": scope,
-                "error": error,
+                "login_hint": login_hint,
             },
         )
 
