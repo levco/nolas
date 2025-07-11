@@ -36,7 +36,10 @@ class WebhookSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
+    model_config = {"env_file": ".env"}
+
     environment: EnvironmentName = Field(alias="ENVIRONMENT")
+    password_encryption_key: str = Field(alias="PASSWORD_ENCRYPTION_KEY")
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     imap: IMAPSettings = Field(default_factory=IMAPSettings)

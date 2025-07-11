@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import UniqueConstraint
 
 from .base import Base, TimestampMixin, WithUUID
 from .decorators.types import EnumStringType
@@ -29,7 +30,7 @@ class Account(Base, WithUUID, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     app_id: Mapped[int] = mapped_column(sa.ForeignKey("apps.id"), nullable=False, index=True)
-    email: Mapped[str] = mapped_column(sa.String(255), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     provider: Mapped[AccountProvider] = mapped_column(EnumStringType(AccountProvider), nullable=False)
     credentials: Mapped[str] = mapped_column(sa.String(255), nullable=False, comment="Encrypted password or token")
     provider_context: Mapped[dict[str, Any]] = mapped_column(JSONB(), nullable=False, server_default=sa.text("'{}'"))
@@ -38,6 +39,8 @@ class Account(Base, WithUUID, TimestampMixin):
     )
 
     app: Mapped["App"] = relationship("App")
+
+    __table_args__ = (UniqueConstraint("app_id", "email", name="uq_account_app_id_email"),)
 
     def __repr__(self) -> str:
         return f"<Account(email='{self.email}', provider='{self.provider.name}')>"

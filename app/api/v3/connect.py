@@ -24,6 +24,7 @@ from app.models.oauth2 import OAuth2AuthorizationRequest, OAuth2RequestStatus
 from app.repos.account import AccountRepo
 from app.repos.app import AppRepo
 from app.repos.oauth2 import OAuth2AuthorizationRequestRepo
+from app.utils.password import PasswordUtils
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,25 +47,15 @@ def _validate_redirect_uri(redirect_uri: str) -> bool:
         return False
 
 
-def _encrypt_password(password: str) -> str:
-    """Encrypt password for storage. In production, use proper encryption."""
-    # TODO: Implement proper password encryption
-    return password
-
-
-async def _test_imap_connection(email: str, password: str, imap_host: str, imap_port: int, use_ssl: bool) -> bool:
+async def _test_imap_connection(email: str, password: str, imap_host: str, imap_port: int) -> bool:
     """Test IMAP connection with provided credentials."""
     try:
         # Create a temporary account for testing
         test_account = Account(
             email=email,
             provider=AccountProvider.imap,
-            credentials=password,
-            provider_context={
-                "imap_host": imap_host,
-                "imap_port": imap_port,
-                "use_ssl": use_ssl,
-            },
+            credentials=PasswordUtils.encrypt_password(password),
+            provider_context={"imap_host": imap_host, "imap_port": imap_port},
             status=AccountStatus.active,
             app_id=0,  # Temporary
         )
@@ -204,7 +195,7 @@ async def process_authorization(
             return JSONResponse(content={"success": False, "error": "Invalid redirect_uri format"}, status_code=400)
 
         # Test IMAP connection
-        if not await _test_imap_connection(email, password, imap_host, imap_port, True):
+        if not await _test_imap_connection(email, password, imap_host, imap_port):
             return JSONResponse(
                 content={
                     "success": False,
@@ -220,7 +211,7 @@ async def process_authorization(
             account = await account_repo.update(
                 existing_account,
                 {
-                    "credentials": _encrypt_password(password),
+                    "credentials": PasswordUtils.encrypt_password(password),
                     "provider_context": {
                         "imap_host": imap_host,
                         "imap_port": imap_port,
@@ -234,7 +225,7 @@ async def process_authorization(
                 app_id=app.id,
                 email=email,
                 provider=AccountProvider.imap,
-                credentials=_encrypt_password(password),
+                credentials=PasswordUtils.encrypt_password(password),
                 provider_context={
                     "imap_host": imap_host,
                     "imap_port": imap_port,

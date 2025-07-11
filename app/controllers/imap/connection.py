@@ -5,6 +5,7 @@ import time
 from aioimaplib import IMAP4_SSL
 
 from app.models import Account
+from app.utils.password import PasswordUtils
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,15 @@ class ConnectionManager:
         self._connection_locks: dict[str, asyncio.Semaphore] = {}
         self._lock = asyncio.Lock()
 
-        # Simple connection limit per provider - no need for complex pooling with polling
-        connection_limit = 10
+        # Simple connection limit per provider
+        self._connection_limit = 10
 
         # TODO: Make dynamic.
         IMAP_HOSTS = ["imap.purelymail.com"]
 
         for imap_host in IMAP_HOSTS:
-            self._connection_locks[imap_host] = asyncio.Semaphore(connection_limit)
-            self._rate_limiters[imap_host] = RateLimiter(rate=connection_limit - 1, burst=connection_limit)
+            self._connection_locks[imap_host] = asyncio.Semaphore(self._connection_limit)
+            self._rate_limiters[imap_host] = RateLimiter(rate=self._connection_limit - 1, burst=self._connection_limit)
 
     async def get_connection_or_fail(self, account: Account, folder: str | None = None) -> IMAP4_SSL:
         """Get an IMAP connection for the account."""
@@ -77,8 +78,7 @@ class ConnectionManager:
         if imap_provider in self._rate_limiters:
             await self._rate_limiters[imap_provider].acquire()
 
-        # Create new connection (no connection reuse needed for polling)
-        async with self._connection_locks.get(imap_provider, asyncio.Semaphore(5)):
+        async with self._connection_locks.get(imap_provider, asyncio.Semaphore(self._connection_limit)):
             return await self._create_new_connection(account, folder)
 
     async def _create_new_connection(self, account: Account, folder: str | None = None) -> IMAP4_SSL | None:
@@ -88,10 +88,11 @@ class ConnectionManager:
             raise ValueError("IMAP host not found in account context")
 
         try:
-            # Use async IMAP library
             connection = IMAP4_SSL(host=imap_host, port=993, timeout=settings.imap.timeout)
             await connection.wait_hello_from_server()
-            response = await connection.login(account.email, account.credentials)
+
+            decrypted_password = PasswordUtils.decrypt_password(account.credentials)
+            response = await connection.login(account.email, decrypted_password)
             if response.result != "OK":
                 self._logger.warning(f"Failed to login to {imap_host} for {account.email}: {response.result}")
                 return None

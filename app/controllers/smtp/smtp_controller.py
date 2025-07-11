@@ -23,6 +23,7 @@ from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
 from app.models.account import Account
 from app.utils.message_utils import MessageUtils
+from app.utils.password import PasswordUtils
 
 
 @dataclass
@@ -248,8 +249,9 @@ class SMTPController:
             # Create SMTP connection
             server = smtplib.SMTP_SSL(smtp_config.host, smtp_config.port)
 
-            # Authenticate
-            server.login(account.email, account.credentials)
+            # Authenticate - decrypt the password before using it
+            decrypted_password = PasswordUtils.decrypt_password(account.credentials)
+            server.login(account.email, decrypted_password)
 
             # Prepare recipient list
             recipients = [addr.email for addr in to]

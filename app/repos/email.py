@@ -22,10 +22,7 @@ class EmailRepo(BaseRepo[Email]):
         result = await self.execute(
             self.base_stmt.where(
                 Email.account_id == account_id,
-                or_(
-                    and_(Email.uid == uid, Email.folder == folder),
-                    Email.email_id == email_id,
-                ),
+                or_(and_(Email.uid == uid, Email.folder == folder), Email.email_id == email_id),
             )
         )
         return result.one_or_none()
