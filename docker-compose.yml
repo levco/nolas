@@ -21,10 +21,10 @@ services:
     networks:
       - lev_infra
 
-  imap-tracker:
+  email-watcher:
     image: nolas
-    container_name: imap-tracker
-    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/imap_tracker.py'
+    container_name: email-watcher
+    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/email_watcher.py'
     env_file:
       - .env
     volumes:
