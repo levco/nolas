@@ -3,7 +3,6 @@ import logging
 import multiprocessing as mp
 from typing import Sequence
 
-from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
 from app.models.account import Account
 from app.repos.account import AccountRepo
@@ -17,20 +16,13 @@ logger = logging.getLogger(__name__)
 class IMAPClusterManager:
     """Manages multiple IMAP worker processes for horizontal scaling."""
 
-    def __init__(
-        self,
-        account_repo: AccountRepo,
-        email_processor: EmailProcessor,
-        imap_listener: IMAPListener,
-        num_workers: int | None = None,
-    ):
+    def __init__(self, account_repo: AccountRepo, imap_listener: IMAPListener, num_workers: int | None = None):
         self._worker_processes: list[mp.Process] = []
         self._shutdown_event = mp.Event()
 
         self._num_workers = num_workers or settings.worker.num_workers
 
         self._account_repo = account_repo
-        self._email_processor = email_processor
         self._imap_listener = imap_listener
 
     async def start_cluster(self) -> None:
@@ -117,12 +109,6 @@ class IMAPClusterManager:
     def _run_worker_process(self, config: WorkerConfig) -> None:
         """Entry point for worker process."""
         try:
-            # Setup logging for worker
-            logging.basicConfig(
-                level=logging.INFO, format=f"%(asctime)s - Worker-{config.worker_id} - %(levelname)s - %(message)s"
-            )
-
-            # Run the async worker
             asyncio.run(start_worker_blocking(config, self._imap_listener))
 
         except KeyboardInterrupt:

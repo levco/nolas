@@ -28,6 +28,7 @@ class IMAPSettings(BaseSettings):
     timeout: int = Field(alias="IMAP_TIMEOUT", default=300)
     poll_interval: int = Field(alias="IMAP_POLL_INTERVAL", default=60)
     poll_jitter_max: int = Field(alias="IMAP_POLL_JITTER", default=30)
+    listener_mode: str = Field(alias="IMAP_LISTENER_MODE", default="single")
 
 
 class WebhookSettings(BaseSettings):

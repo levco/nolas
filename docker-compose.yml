@@ -21,6 +21,18 @@ services:
     networks:
       - lev_infra
 
+  imap-tracker:
+    image: nolas
+    container_name: imap-tracker
+    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/imap_tracker.py'
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - .:/workers
+    networks:
+      - lev_infra
+
 networks:
   lev_infra:
     name: lev-infra-dev_default
