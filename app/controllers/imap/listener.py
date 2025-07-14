@@ -10,7 +10,7 @@ from app.constants.emails import HEADER_MESSAGE_ID
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.folder_utils import FolderUtils
-from app.models import Account, Email
+from app.models import Account, Email, UidTracking
 from app.repos.connection_health import ConnectionHealthRepo
 from app.repos.email import EmailRepo
 from app.repos.uid_tracking import UidTrackingRepo
@@ -157,18 +157,6 @@ class IMAPListener:
 
         self._logger.info("Stopped all IMAP listeners")
 
-    async def get_listener_stats(self) -> dict[str, int]:
-        """Get statistics about active listeners."""
-        async with self._listener_lock:
-            total_listeners = len(self._active_listeners)
-            active_listeners = sum(1 for task in self._active_listeners.values() if not task.done())
-
-            return {
-                "total_listeners": total_listeners,
-                "active_listeners": active_listeners,
-                "failed_listeners": total_listeners - active_listeners,
-            }
-
     async def _listen_to_folder(self, account: Account, folder: str) -> None:
         """Poll a specific folder for new emails."""
 
@@ -187,7 +175,17 @@ class IMAPListener:
                 connection = await self._connection_manager.get_connection_or_fail(account, folder)
                 search_response = await connection.search("ALL")
                 all_uids = self._parse_search_response(search_response)
-                last_seen_uid = await self._get_last_seen_uid(account.id, folder)
+                last_seen_uid = await self._uid_tracking_repo.get_last_seen_uid(account.id, folder)
+                if last_seen_uid is None:
+                    self._logger.warning(
+                        f"No last seen UID found for {account.email}:{folder}. Creating new UID tracking"
+                    )
+                    last_seen_uid = all_uids[-1] if all_uids else 0
+                    await self._uid_tracking_repo.add(
+                        UidTracking(account_id=account.id, folder=folder, last_seen_uid=last_seen_uid), commit=True
+                    )
+                    self._logger.info(f"New UID tracking created for {account.email}:{folder}: {last_seen_uid}")
+
                 new_uids = [uid for uid in all_uids if uid > last_seen_uid]
                 if new_uids:
                     self._logger.info(f"Found {len(new_uids)} new messages for {account.email}:{folder}: {new_uids}")
@@ -250,14 +248,6 @@ class IMAPListener:
             self._active_listeners.pop(listener_key, None)
 
         self._logger.info(f"Stopped polling for {account.email}:{folder}")
-
-    async def _get_last_seen_uid(self, account_id: int, folder: str) -> int:
-        """Get the last seen UID for an account/folder combination using repository."""
-        try:
-            return await self._uid_tracking_repo.get_last_seen_uid(account_id, folder)
-        except Exception as e:
-            self._logger.exception(f"Failed to get last seen UID: {e}")
-        return 0
 
     async def _update_last_seen_uid(self, account_id: int, folder: str, uid: int) -> None:
         """Update the last seen UID for an account/folder combination using repository."""

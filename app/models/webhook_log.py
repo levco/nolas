@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, WithUUID
 
 if TYPE_CHECKING:
     from .account import Account
 
 
-class WebhookLog(Base, TimestampMixin):
+class WebhookLog(Base, TimestampMixin, WithUUID):
     """Model for logging webhook delivery attempts."""
 
     __tablename__ = "webhook_logs"

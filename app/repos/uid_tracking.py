@@ -10,13 +10,13 @@ class UidTrackingRepo(BaseRepo[UidTracking]):
     def __init__(self) -> None:
         super().__init__(UidTracking)
 
-    async def get_last_seen_uid(self, account_id: int, folder: str) -> int:
+    async def get_last_seen_uid(self, account_id: int, folder: str) -> int | None:
         """Get the last seen UID for an account/folder combination."""
         result = await self.execute(
             self.base_stmt.where(UidTracking.account_id == account_id, UidTracking.folder == folder)
         )
         uid_tracking = result.one_or_none()
-        return uid_tracking.last_seen_uid if uid_tracking else 0
+        return uid_tracking.last_seen_uid if uid_tracking else None
 
     async def update_last_seen_uid(self, account_id: int, folder: str, uid: int) -> UidTracking:
         """Update the last seen UID for an account/folder combination."""

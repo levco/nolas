@@ -133,6 +133,7 @@ def upgrade() -> None:
     op.create_table(
         "webhook_logs",
         sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("uuid", sa.UUID(), server_default=sa.text("uuid_generate_v4()"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("app_id", sa.BigInteger(), nullable=False),

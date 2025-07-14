@@ -24,37 +24,33 @@ logger = logging.getLogger(__name__)
 container = get_wire_container()
 
 
-def main() -> None:
-    logger.info(f"Starting IMAP tracker in {settings.imap.listener_mode} mode")
+async def main() -> None:
+    async with fastapi_sqlalchemy_context():
+        account_repo = container.repos.account()
+        active_accounts = (await account_repo.get_all_active()).all()
+        if len(active_accounts) == 0:
+            logger.debug("No active accounts found.")
+            return
+
+    logger.info(f"Starting IMAP watcher in {settings.imap.listener_mode} mode")
 
     mode = settings.imap.listener_mode
     if mode == "single":
-        asyncio.run(run_single_worker_mode())
+        await run_single_worker_mode()
     elif mode == "cluster":
-        asyncio.run(run_cluster_mode())
+        await run_cluster_mode()
     else:
         raise ValueError(f"Invalid listener mode: {mode}")
 
 
 async def run_single_worker_mode() -> None:
     """Run in single worker mode (for development/testing)."""
-    logger.info("Starting in single worker mode")
-
     async with fastapi_sqlalchemy_context():
         try:
             imap_listener = container.controllers.imap_listener()
 
-            # Get account repo from container
             account_repo = container.repos.account()
-
-            # Get all active accounts
             active_accounts = (await account_repo.get_all_active()).all()
-
-            if len(active_accounts) == 0:
-                logger.warning("No active accounts found. Run with --migrate first.")
-                return
-
-            # Get all accounts
             logger.info(f"Found {len(active_accounts)} active accounts")
 
             # Create single worker config
@@ -131,4 +127,4 @@ async def run_cluster_mode(num_workers: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

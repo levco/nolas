@@ -55,7 +55,9 @@ async def validate_grant_access(
     account = await account_repo.get_by_app_and_uuid(app_id, grant_id)
     if account is None:
         error_response = create_error_response(
-            error_type="invalid_request_error", message="Invalid grant", status_code=status.HTTP_400_BAD_REQUEST
+            error_type="grant.not_found",
+            message="No Grant found for this Grant ID.",
+            status_code=status.HTTP_404_NOT_FOUND,
         )
         return None, error_response
     return account, None

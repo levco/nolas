@@ -35,7 +35,7 @@ class IMAPClusterManager:
             logger.info(f"Loaded {len(accounts)} active accounts from database")
 
             if not accounts:
-                logger.warning("No active accounts found in database")
+                logger.debug("No active accounts found in database")
                 return
 
             # Distribute accounts across workers

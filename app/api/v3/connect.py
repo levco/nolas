@@ -218,6 +218,11 @@ async def process_authorization(
                         "smtp_host": smtp_host,
                         "smtp_port": smtp_port,
                     },
+                    "status": (
+                        AccountStatus.active
+                        if existing_account.status == AccountStatus.active
+                        else AccountStatus.pending
+                    ),
                 },
             )
         else:
