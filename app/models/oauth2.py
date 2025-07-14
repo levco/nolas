@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin, WithUUID
+from .base import Base, TimestampMixin
 from .decorators.types import EnumStringType
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ class OAuth2RequestStatus(Enum):
     expired = "expired"
 
 
-class OAuth2AuthorizationRequest(Base, WithUUID, TimestampMixin):
+class OAuth2AuthorizationRequest(Base, TimestampMixin):
     """OAuth2 authorization request model for storing pending authorization requests."""
 
     __tablename__ = "oauth2_authorization_requests"

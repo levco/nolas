@@ -3,11 +3,11 @@ BE=nolas
 upgrade:
 	docker exec -it $(BE) alembic upgrade head
 
-migrate:
-	if [[ -z "$(msg)" ]]; then \
-		echo "Please provide a message for the migration"; \
-		echo "For example: make migrate msg=\"some migration name\""; \
-	else docker exec -it $(BE) alembic revision --autogenerate -m "$(msg)"; \
+revision:
+	if [[ -z "$(file_name)" ]]; then \
+		echo "Please provide a file name for the migration"; \
+		echo "For example: make revision file_name=\"some_migration_name\""; \
+	else docker exec -it $(BE) alembic revision --autogenerate -m "$(file_name)"; \
 	fi
 
 downgrade:
