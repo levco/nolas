@@ -2,6 +2,7 @@
 API models package for Pydantic response/request models.
 """
 
+from .grants import DeleteGrantResponse
 from .messages import (
     AttachmentData,
     EmailAddress,
@@ -16,6 +17,7 @@ from .messages import (
 __all__ = [
     "AttachmentData",
     "AttachmentResponse",
+    "DeleteGrantResponse",
     "EmailAddress",
     "Message",
     "MessageAttachment",

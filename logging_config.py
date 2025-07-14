@@ -73,6 +73,8 @@ LOCAL_LOGGING_CONFIG = {
         "botocore": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "urllib3": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "pymongo": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
+        "aioimaplib": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
+        "asyncio": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
     },
 }
 

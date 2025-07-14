@@ -3,6 +3,7 @@ from typing import cast
 from dependency_injector import containers, providers
 
 from app.controllers.email.email_controller import EmailController
+from app.controllers.grant.grant_controller import GrantController
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
@@ -33,4 +34,10 @@ class ControllerContainer(containers.DeclarativeContainer):
         email_repo=repos.email,
         message_controller=imap_message_controller,
         smtp_controller=smtp_controller,
+    )
+
+    grant_controller = providers.Singleton(
+        GrantController,
+        account_repo=repos.account,
+        uid_tracking_repo=repos.uid_tracking,
     )

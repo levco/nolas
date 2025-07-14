@@ -35,3 +35,15 @@ class UidTrackingRepo(BaseRepo[UidTracking]):
             await self.add(tracking)
 
         return tracking
+
+    async def delete_all_by_account(self, account_id: int) -> int:
+        """Delete all uid_tracking records for a specific account."""
+        result = await self.execute(self.base_stmt.where(UidTracking.account_id == account_id))
+        uid_tracking_records = result.all()
+
+        count = len(uid_tracking_records)
+        for record in uid_tracking_records:
+            await self.delete(record)
+
+        await self.flush()
+        return count

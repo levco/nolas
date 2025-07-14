@@ -5,12 +5,14 @@ import random
 from email.message import Message
 
 from aioimaplib import IMAP4_SSL, Response
+from fastapi_async_sqlalchemy import db
 
 from app.constants.emails import HEADER_MESSAGE_ID
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.folder_utils import FolderUtils
 from app.models import Account, Email, UidTracking
+from app.models.account import AccountStatus
 from app.repos.connection_health import ConnectionHealthRepo
 from app.repos.email import EmailRepo
 from app.repos.uid_tracking import UidTrackingRepo
@@ -172,6 +174,15 @@ class IMAPListener:
         while not self._shutdown_event.is_set():
             connection: IMAP4_SSL | None = None
             try:
+                await db.session.refresh(account)
+                if account.status != AccountStatus.active:
+                    self._logger.debug(f"Account {account.email} is not active, skipping folder {folder}")
+                    for _ in range(poll_interval * 20):
+                        if self._shutdown_event.is_set():
+                            return
+                        await asyncio.sleep(0.1)
+                    continue
+
                 connection = await self._connection_manager.get_connection_or_fail(account, folder)
                 search_response = await connection.search("ALL")
                 all_uids = self._parse_search_response(search_response)
@@ -204,7 +215,7 @@ class IMAPListener:
                 for _ in range(poll_interval * 10):
                     if self._shutdown_event.is_set():
                         return
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
                 self._logger.info(f"Polling cancelled for {account.email}:{folder}")
