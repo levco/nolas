@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Path
 from fastapi.responses import JSONResponse
 
-from app.api.models.error import APIError
-from app.api.models.folders import Folder, FolderResponse
+from app.api.payloads.error import APIError
+from app.api.payloads.folders import Folder, FolderResponse
 
 router = APIRouter()
 

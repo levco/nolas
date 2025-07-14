@@ -13,14 +13,14 @@ from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
-from app.api.models import (
+from app.api.payloads import (
     MessageListResponse,
     MessageResponse,
     SendMessageRequest,
     SendMessageResponse,
 )
-from app.api.models.error import APIError
-from app.api.models.messages import AttachmentData
+from app.api.payloads.error import APIError
+from app.api.payloads.messages import AttachmentData
 from app.api.utils.errors import create_error_response, validate_grant_access
 from app.container import ApplicationContainer
 from app.controllers.email.email_controller import EmailController

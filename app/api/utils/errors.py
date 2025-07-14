@@ -5,7 +5,7 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from app.api.models.error import APIError, ErrorDetail
+from app.api.payloads.error import APIError, ErrorDetail
 from app.container import ApplicationContainer
 from app.models.account import Account
 from app.repos.account import AccountRepo

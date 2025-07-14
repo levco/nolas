@@ -5,7 +5,7 @@ from email.message import Message as PythonEmailMessage
 from imaplib import IMAP4_SSL
 from typing import Any
 
-from app.api.models.messages import Message
+from app.api.payloads.messages import Message
 from app.controllers.email.message import MessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils

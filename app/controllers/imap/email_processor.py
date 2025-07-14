@@ -11,7 +11,7 @@ from uuid import UUID
 
 import aiohttp
 
-from app.api.models.messages import Message
+from app.api.payloads.messages import Message
 from app.models import Account, WebhookLog
 from app.repos.webhook_log import WebhookLogRepo
 from app.utils.message_utils import MessageUtils

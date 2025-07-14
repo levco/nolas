@@ -12,7 +12,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate
 from typing import Any
 
-from app.api.models.messages import (
+from app.api.payloads.messages import (
     AttachmentData,
     EmailAddress,
     MessageAttachment,

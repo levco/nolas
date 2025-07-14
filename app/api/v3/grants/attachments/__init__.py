@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, Path, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.middlewares.authentication import get_current_app
-from app.api.models.attachments import AttachmentMetadata, AttachmentMetadataResponse
-from app.api.models.error import APIError
-from app.api.models.messages import MessageAttachment
+from app.api.payloads.attachments import AttachmentMetadata, AttachmentMetadataResponse
+from app.api.payloads.error import APIError
+from app.api.payloads.messages import MessageAttachment
 from app.api.utils.errors import create_error_response, validate_grant_access
 from app.container import ApplicationContainer
 from app.controllers.email.email_controller import EmailController
@@ -71,13 +71,13 @@ async def _get_attachment_from_message(
 
         return message_result, attachment, None
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to get attachment {attachment_id} from message {message_id}")
         error_response = create_error_response(
             error_type="provider_error",
             message="Failed to get attachment",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            provider_error={"error": str(e)},
+            provider_error={"code": "InternalServerError", "message": "Failed to get attachment"},
         )
         return None, None, error_response
 

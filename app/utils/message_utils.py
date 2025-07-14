@@ -4,7 +4,7 @@ from email.message import Message as PythonEmailMessage
 from email.utils import getaddresses, mktime_tz, parsedate_tz
 from uuid import UUID
 
-from app.api.models.messages import EmailAddress, Message, MessageAttachment
+from app.api.payloads.messages import EmailAddress, Message, MessageAttachment
 
 logger = logging.getLogger(__name__)
 

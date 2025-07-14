@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from app.api.models.messages import AttachmentData, EmailAddress
+from app.api.payloads.messages import AttachmentData, EmailAddress
 from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.message_controller import MessageController
 from app.controllers.smtp.smtp_controller import (

@@ -14,8 +14,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.api.middlewares.authentication import get_current_app
-from app.api.models.error import APIError
-from app.api.models.oauth2 import OAuth2TokenRequest, OAuth2TokenResponse
+from app.api.payloads.error import APIError
+from app.api.payloads.oauth2 import OAuth2TokenRequest, OAuth2TokenResponse
 from app.container import ApplicationContainer
 from app.controllers.imap.connection import ConnectionManager
 from app.models.account import Account, AccountProvider, AccountStatus
