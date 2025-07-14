@@ -1,0 +1,27 @@
+services:
+  nolas:
+    image: nolas
+    container_name: nolas
+    build:
+      context: .
+      args:
+        ENV: dev
+      ssh: [default]
+    env_file:
+      - .env
+    command: bash -c "
+      uvicorn main:app --host 0.0.0.0 --port 8001 --lifespan=on --use-colors --loop uvloop --http httptools
+      --reload --log-level debug"
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+    external_links:
+      - postgres:postgres
+    networks:
+      - lev_infra
+
+networks:
+  lev_infra:
+    name: lev-infra-dev_default
+    external: true
