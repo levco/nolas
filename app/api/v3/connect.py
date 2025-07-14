@@ -3,7 +3,6 @@ OAuth2 Connect router - Handles OAuth2 authorization flow for IMAP accounts.
 """
 
 import logging
-import secrets
 import uuid
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -17,14 +16,11 @@ from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
 from app.api.payloads.oauth2 import OAuth2TokenRequest, OAuth2TokenResponse
 from app.container import ApplicationContainer
-from app.controllers.imap.connection import ConnectionManager
-from app.models.account import Account, AccountProvider, AccountStatus
+from app.controllers.grant.authorization_controller import AuthorizationController
 from app.models.app import App
-from app.models.oauth2 import OAuth2AuthorizationRequest, OAuth2RequestStatus
 from app.repos.account import AccountRepo
 from app.repos.app import AppRepo
 from app.repos.oauth2 import OAuth2AuthorizationRequestRepo
-from app.utils.password import PasswordUtils
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,46 +29,12 @@ router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
-def _generate_authorization_code() -> str:
-    """Generate a secure authorization code."""
-    return secrets.token_urlsafe(32)
-
-
 def _validate_redirect_uri(redirect_uri: str) -> bool:
     """Validate redirect URI format."""
     try:
         parsed = urlparse(redirect_uri)
         return bool(parsed.scheme in ["http", "https"] and parsed.netloc)
     except Exception:
-        return False
-
-
-async def _test_imap_connection(email: str, password: str, imap_host: str, imap_port: int) -> bool:
-    """Test IMAP connection with provided credentials."""
-    try:
-        # Create a temporary account for testing
-        test_account = Account(
-            email=email,
-            provider=AccountProvider.imap,
-            credentials=PasswordUtils.encrypt_password(password),
-            provider_context={"imap_host": imap_host, "imap_port": imap_port},
-            status=AccountStatus.active,
-            app_id=0,  # Temporary
-        )
-
-        # Test connection
-        connection_manager = ConnectionManager()
-        try:
-            connection = await connection_manager.get_connection(test_account)
-            if connection is None:
-                return False
-            await connection_manager.close_connection(connection, test_account)
-            return True
-        except Exception as e:
-            logger.warning(f"IMAP connection test failed for {email}: {e}")
-            return False
-    except Exception as e:
-        logger.error(f"Error testing IMAP connection: {e}")
         return False
 
 
@@ -165,10 +127,9 @@ async def process_authorization(
     smtp_host: str = Form(...),
     smtp_port: int = Form(587),
     app_repo: AppRepo = Depends(Provide[ApplicationContainer.repos.app]),
-    auth_request_repo: OAuth2AuthorizationRequestRepo = Depends(
-        Provide[ApplicationContainer.repos.oauth2_authorization_request]
+    authorization_controller: AuthorizationController = Depends(
+        Provide[ApplicationContainer.controllers.authorization_controller]
     ),
-    account_repo: AccountRepo = Depends(Provide[ApplicationContainer.repos.account]),
 ) -> JSONResponse:
     """
     Process the authorization form submission.
@@ -181,7 +142,6 @@ async def process_authorization(
     """
 
     try:
-        # Validate client_id and get app
         try:
             app_uuid = uuid.UUID(client_id)
             app = await app_repo.get_by_uuid(app_uuid)
@@ -190,74 +150,28 @@ async def process_authorization(
         except Exception:
             return JSONResponse(content={"success": False, "error": "Invalid client_id"}, status_code=400)
 
-        # Validate redirect URI
         if not _validate_redirect_uri(redirect_uri):
             return JSONResponse(content={"success": False, "error": "Invalid redirect_uri format"}, status_code=400)
 
-        # Test IMAP connection
-        if not await _test_imap_connection(email, password, imap_host, imap_port):
-            return JSONResponse(
-                content={
-                    "success": False,
-                    "error": "Unable to connect to email server. Please check your credentials and try again.",
-                },
-                status_code=400,
-            )
-
-        # Check if account already exists
-        existing_account = await account_repo.get_by_email(email)
-        if existing_account:
-            # Update existing account
-            account = await account_repo.update(
-                existing_account,
-                {
-                    "credentials": PasswordUtils.encrypt_password(password),
-                    "provider_context": {
-                        "imap_host": imap_host,
-                        "imap_port": imap_port,
-                        "smtp_host": smtp_host,
-                        "smtp_port": smtp_port,
-                    },
-                    "status": (
-                        AccountStatus.active
-                        if existing_account.status == AccountStatus.active
-                        else AccountStatus.pending
-                    ),
-                },
-            )
-        else:
-            account = Account(
-                app_id=app.id,
-                email=email,
-                provider=AccountProvider.imap,
-                credentials=PasswordUtils.encrypt_password(password),
-                provider_context={
-                    "imap_host": imap_host,
-                    "imap_port": imap_port,
-                    "smtp_host": smtp_host,
-                    "smtp_port": smtp_port,
-                },
-                status=AccountStatus.pending,
-            )
-            await account_repo.add(account)
-
-        # Generate authorization code
-        auth_code = _generate_authorization_code()
-
-        # Create authorization request
-        auth_request = OAuth2AuthorizationRequest(
-            app_id=app.id,
+        success, result = await authorization_controller.process_authorization(
+            app=app,
             client_id=client_id,
             redirect_uri=redirect_uri,
             state=state,
             scope=scope,
-            status=OAuth2RequestStatus.authorized,
-            code=auth_code,
-            account=account,
+            email=email,
+            password=password,
+            imap_host=imap_host,
+            imap_port=imap_port,
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
         )
-        await auth_request_repo.add(auth_request)
 
-        redirect_params = {"code": auth_code, "state": state, "source": "nolas"}
+        if not success:
+            return JSONResponse(content={"success": False, "error": result}, status_code=400)
+
+        # Build redirect URL with authorization code
+        redirect_params = {"code": result, "state": state, "source": "nolas"}
         redirect_url = f"{redirect_uri}?{urlencode(redirect_params)}"
 
         return JSONResponse(content={"success": True, "redirect_url": redirect_url}, status_code=200)

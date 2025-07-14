@@ -145,6 +145,18 @@ class SMTPController:
         thread_id = replied_message.message.thread_id if replied_message else message_id
         return SendMessageResult(message=data, message_id=message_id, thread_id=thread_id, folder=sent_folder)
 
+    async def login(self, email: str, password: str, host: str, port: int) -> smtplib.SMTP_SSL | None:
+        """Login to the SMTP server."""
+        try:
+            server = smtplib.SMTP_SSL(host, port)
+            response = server.login(email, password)
+            if response[0] != 235:
+                return None
+            return server
+        except Exception:
+            self._logger.warning("Failed to login to SMTP server", stack_info=True)
+            return None
+
     def _get_smtp_config(self, account: Account) -> _SMTPConfig:
         """Extract SMTP configuration from account."""
         provider_context = account.provider_context
@@ -246,12 +258,14 @@ class SMTPController:
     ) -> str:
         """Send message via SMTP."""
         try:
-            # Create SMTP connection
-            server = smtplib.SMTP_SSL(smtp_config.host, smtp_config.port)
-
-            # Authenticate - decrypt the password before using it
-            decrypted_password = PasswordUtils.decrypt_password(account.credentials)
-            server.login(account.email, decrypted_password)
+            server = await self.login(
+                account.email,
+                password=PasswordUtils.decrypt_password(account.credentials),
+                host=smtp_config.host,
+                port=smtp_config.port,
+            )
+            if not server:
+                raise SMTPException("Failed to login to SMTP server")
 
             # Prepare recipient list
             recipients = [addr.email for addr in to]
