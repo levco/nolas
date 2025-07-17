@@ -53,6 +53,7 @@ COPY --chown=lev:lev workers/ workers/
 COPY --chown=lev:lev logging_config.py ./
 COPY --chown=lev:lev gunicorn.conf.py ./
 COPY --chown=lev:lev main.py ./
+COPY --chown=lev:lev alembic.ini ./alembic.ini
 
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
