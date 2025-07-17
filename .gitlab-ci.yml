@@ -1,0 +1,315 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "external_pull_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-hotfix$/'
+
+variables:
+  LEV_SERVICE: nolas
+  LEV_CI_SLUG: $LEV_SERVICE-$CI_COMMIT_REF_SLUG
+
+stages:
+  - build
+  - review
+  - deploy_staging
+  - deploy_production
+
+build_staging_with_dind:
+  stage: build
+  image: docker:28-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376/ # Port 2376 must be used for TLS connections
+    DOCKER_DRIVER: overlay2
+  services:
+    - name: docker:28-dind
+  before_script: # login to dockerhub
+    - echo $DOCKERHUB_REGISTRY_PASSWORD | docker login -u $DOCKERHUB_REGISTRY_USER $DOCKERHUB_REGISTRY --password-stdin
+  script:
+    - DOCKER_BUILDKIT=1 docker build --secret id=lev_deploy_key,src=$LEV_DEPLOY_KEY -f Dockerfile-k8s --tag "levcapital/$LEV_SERVICE:$CI_COMMIT_SHA" --tag "levcapital/$LEV_SERVICE:latest" .
+    - docker image push --all-tags "levcapital/$LEV_SERVICE"
+  tags:
+    - saas-linux-small-amd64
+  interruptible: true
+  rules:
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+
+build_with_dind:
+  stage: build
+  image: docker:28-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376/ # Port 2376 must be used for TLS connections
+    DOCKER_DRIVER: overlay2
+  services:
+    - name: docker:28-dind
+  before_script: # login to dockerhub
+    - echo $DOCKERHUB_REGISTRY_PASSWORD | docker login -u $DOCKERHUB_REGISTRY_USER $DOCKERHUB_REGISTRY --password-stdin
+  script:
+    - DOCKER_BUILDKIT=1 docker build --secret id=lev_deploy_key,src=$LEV_DEPLOY_KEY -f Dockerfile-k8s --tag "levcapital/$LEV_SERVICE:$CI_COMMIT_SHA" --tag "levcapital/$LEV_SERVICE:$CI_COMMIT_REF_SLUG" .
+    - docker image push --all-tags "levcapital/$LEV_SERVICE"
+  tags:
+    - saas-linux-small-amd64
+  interruptible: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "external_pull_request_event"'
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-hotfix$/'
+
+
+.run_tests_and_graphql_diff:
+  stage: build
+  image:
+    name: "python:3.11-slim"
+    entrypoint: [""]
+  services:
+    - name: postgres:13.6
+      alias: db
+  cache:
+    paths:
+      - .cache/pip
+  variables:
+    LEV_ENV: unittest
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+    POSTGRES_DB: lev_ai_test
+    POSTGRES_PASSWORD: local_db_password
+    POSTGRES_USER: local_db_user
+#    POETRY_HOME: "/opt/poetry"
+#    PATH: "$POETRY_HOME/bin:$PATH"
+    PYTHONPATH: /home/code
+    PYTHONHASHSEED: 0
+  before_script:
+    - apt-get update
+    - apt-get upgrade -y
+    - apt-get install -y --no-install-recommends curl git build-essential ssh libcurl4-openssl-dev libssl-dev gcc
+    - mkdir –m700 ~/.ssh
+    - echo "Host github.com" >> ~/.ssh/config
+    - echo "User git" >> ~/.ssh/config
+    - echo "IdentityFile ~/.ssh/lev_deploy_key" >> ~/.ssh/config
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - cp $LEV_DEPLOY_KEY ~/.ssh/lev_deploy_key && chmod 600 ~/.ssh/lev_deploy_key
+    - mkdir -p /opt/poetry
+    - export POETRY_HOME=/opt/poetry
+    - curl -sSL https://install.python-poetry.org | python3 -
+    - export PATH=$POETRY_HOME/bin:$PATH
+    - poetry config virtualenvs.create false && poetry install --no-root
+  script:
+    - 'curl --request GET --url "https://api.doppler.com/v3/configs/config/secrets/download?project=nolas&config=dev&format=env-no-quotes&include_dynamic_secrets=true&dynamic_secrets_ttl_sec=1800" --header "Accept: application/json" --user "$NOLAS_DEV_DOPPLER_TOKEN" --output nolas.env --silent'
+    - set -a
+    - . ./nolas.env
+    - set +a
+    - pytest -W ignore unit_tests/ --junitxml=junit_reports/pytest_unit_test_report.xml
+    - pytest tests/ --junitxml=junit_reports/pytest_integration_report.xml
+  after_script:
+    - export SLACK_MESSAGE="Unit tests failed for $LEV_SERVICE pipeline* $CI_COMMIT_REF_NAME*. Results can be viewed at $CI_PIPELINE_URL/test_report"
+    - 'if [[ "$CI_JOB_STATUS" == "failure" ]]; then curl -H "Content-type: application/json; charset=utf-8" --data "{\"channel\":\"${SLACK_CI_CHANNEL_ID}\",\"blocks\":[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"${SLACK_MESSAGE}\"}}]}" -H "Authorization: Bearer $SLACK_TOKEN" -X POST https://slack.com/api/chat.postMessage; fi'
+  interruptible: true
+  artifacts:
+    when: always
+    reports:
+      junit: ./junit_reports/*.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "external_pull_request_event"'
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+
+deploy_dev:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  script:
+    - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
+    - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/dev/.dockerconfigjson
+    - doppler secrets download --token=$NOLAS_DEV_AWS_DOPPLER_TOKEN --project nolas --config dev_aws --no-file --format env-no-quotes > k8s/apps/nolas/overlays/dev/lender_universe.env
+    - echo $CI_COMMIT_SHA
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/dev/kustomization.yaml
+    - kubectl -n dev apply -k k8s/apps/common/overlays/dev --kubeconfig $KUBECONFIG_CI
+    - kubectl -n dev apply -k k8s/apps/nolas/overlays/dev --kubeconfig $KUBECONFIG_CI
+    - kubectl -n dev rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_CI
+  environment:
+    name: dev
+    url: https://nolas-dev.lev.com
+    deployment_tier: staging
+  resource_group: deploy-nolas-dev
+  rules:
+    - if: "$CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH"
+      when: manual
+      allow_failure: true
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+
+deploy_staging:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  script:
+    - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
+    - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/staging/.dockerconfigjson
+    - doppler secrets download --token=$NOLAS_STG_DOPPLER_TOKEN --project nolas --config stg --no-file --format env-no-quotes > k8s/apps/nolas/overlays/staging/lender_universe.env
+    - echo $CI_COMMIT_SHA
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/staging/kustomization.yaml
+    - kubectl -n staging apply -k k8s/apps/common/overlays/staging --kubeconfig $KUBECONFIG_STAGING
+    - kubectl -n staging apply -k k8s/apps/nolas/overlays/staging --kubeconfig $KUBECONFIG_STAGING
+    - kubectl -n staging rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_STAGING
+  environment:
+    name: staging
+    url: https://nolas-staging.lev.com
+    deployment_tier: staging
+  resource_group: deploy-nolas-staging
+  rules:
+    - if: "$CI_EXTERNAL_PULL_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH"
+      when: manual
+      allow_failure: true
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+
+deploy_qa:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  script:
+    - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
+    - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/qa/.dockerconfigjson
+    - doppler secrets download --token=$NOLAS_QA_K8S_DOPPLER_TOKEN --project nolas --config stg_qa --no-file --format env-no-quotes > k8s/apps/nolas/overlays/qa/lender_universe.env
+    - echo $CI_COMMIT_SHA
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/qa/kustomization.yaml
+    - kubectl -n qa apply -k k8s/apps/common/overlays/qa --kubeconfig $KUBECONFIG_QA
+    - kubectl -n qa apply -k k8s/apps/nolas/overlays/qa --kubeconfig $KUBECONFIG_QA
+    - kubectl -n qa rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_QA
+    - sleep 20
+    - export NOLAS_POD=$(kubectl --kubeconfig $KUBECONFIG_QA -n qa get pods --selector=service=nolas --field-selector=status.phase=Running --template '{{range .items}}{{.metadata.name}}{{end}}')
+  environment:
+    name: qa
+    url: https://nolas-qa.lev.com
+    deployment_tier: staging
+  resource_group: deploy-qa
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+
+rollback_staging:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Rolling back application to previous deployment"
+    - kubectl -n staging rollout undo deployments/nolas --kubeconfig $KUBECONFIG_STAGING
+  rules:
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+      allow_failure: true
+      when: manual
+
+rollback_qa:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Rolling back application to previous deployment"
+    - kubectl -n qa rollout undo deployments/nolas --kubeconfig $KUBECONFIG_QA
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+
+restart_staging_nolas:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Restarting application"
+    - kubectl -n staging rollout restart deployments/nolas --kubeconfig $KUBECONFIG_STAGING
+  rules:
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+      allow_failure: true
+      when: manual
+
+restart_qa_nolas:
+  stage: deploy_staging
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Restarting application"
+    - kubectl -n qa rollout restart deployments/nolas --kubeconfig $KUBECONFIG_QA
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+
+deploy_production:
+  stage: deploy_production
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  script:
+    - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
+    - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/production/.dockerconfigjson
+    - doppler secrets download --token=$NOLAS_PRODUCTION_K8S_DOPPLER_TOKEN --project nolas --config prd --no-file --format env-no-quotes > k8s/apps/nolas/overlays/production/lender_universe.env
+    - echo $CI_COMMIT_SHA
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/production/kustomization.yaml
+    - kubectl -n production apply -k k8s/apps/common/overlays/production --kubeconfig $KUBECONFIG_PRODUCTION
+    - kubectl -n production apply -k k8s/apps/nolas/overlays/production --kubeconfig $KUBECONFIG_PRODUCTION
+    - kubectl -n production rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_PRODUCTION
+  environment:
+    name: production
+    url: https://nolas-production.lev.com
+    deployment_tier: production
+  resource_group: deploy-production
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-hotfix$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+
+rollback_production:
+  stage: deploy_production
+  needs:
+    - deploy_production
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Rolling back application to previous deployment"
+    - kubectl -n production rollout undo deployments/nolas --kubeconfig $KUBECONFIG_PRODUCTION
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-hotfix$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+
+restart_production_nolas:
+  stage: deploy_production
+  needs:
+    - deploy_production
+  image:
+    name: registry.gitlab.com/lev-infra/lev-ci:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - echo "Restarting application"
+    - kubectl -n production rollout restart deployments/nolas --kubeconfig $KUBECONFIG_PRODUCTION
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /.*release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-hotfix$/'
+      allow_failure: true # This must be set to avoid the pipeline blocking when job is not run
+      when: manual

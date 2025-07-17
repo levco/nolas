@@ -1,0 +1,63 @@
+FROM python:3.13.5-bookworm AS build
+
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends curl git build-essential ssh \
+       libcurl4-openssl-dev libssl-dev gcc \
+    && apt-get autoremove -y
+
+COPY --from=ghcr.io/astral-sh/uv:0.6.6 /uv /bin/uv
+
+WORKDIR /app
+
+RUN uv venv --relocatable
+
+ENV LIBRARY_PATH=/lib:/usr/lib
+ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+
+COPY pyproject.toml uv.lock ./
+
+# add github.com to known hosts
+RUN mkdir -p -m 0600 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+RUN echo "Host github.com\nUser git\nIdentityFile /kaniko/lev_deploy_key" > ~/.ssh/config
+RUN echo "Environment: ${ENV}"
+RUN --mount=type=secret,id=lev_deploy_key,dst=/kaniko/lev_deploy_key \
+    if [ "$ENV" = "dev" ]; then \
+    echo 'Installing DEV' && uv sync --extra dev --frozen --no-install-project; \
+    else \
+    echo 'Installing REG' && uv sync --frozen --no-install-project; \
+    fi
+
+# Run second stage of build
+FROM python:3.15-slim
+
+RUN useradd --create-home lev
+
+# create /app directory and chown to to node user or else it will be owned by root
+RUN mkdir -p /app && chown lev:lev /app
+
+WORKDIR /app
+
+# Install utility programs including procps for healthcheck
+RUN apt-get update && apt-get install -y procps dumb-init curl && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy files from build stage
+COPY --chown=lev:lev --from=build /app/.venv /app/.venv
+
+COPY --chown=lev:lev app/ app/
+COPY --chown=lev:lev app_settings/ app_settings/
+COPY --chown=lev:lev scripts/ scripts/
+COPY --chown=lev:lev workers/ workers/
+COPY --chown=lev:lev logging_config.py ./
+COPY --chown=lev:lev gunicorn.conf.py ./
+COPY --chown=lev:lev main.py ./
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONHASHSEED=0
+
+USER lev
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
