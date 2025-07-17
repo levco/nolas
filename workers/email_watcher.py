@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+from time import sleep
 
 from dotenv import load_dotenv
 
@@ -81,6 +82,7 @@ async def run_single_worker_mode() -> None:
 
         except Exception:
             logger.exception("Error in single worker mode")
+            raise
 
 
 async def run_cluster_mode(num_workers: int | None = None) -> None:
@@ -127,4 +129,11 @@ async def run_cluster_mode(num_workers: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    logger.info("Starting IMAP watcher")
+    while True:
+        try:
+            asyncio.run(main())
+        except Exception:
+            logger.exception("Error in main")
+            break
+        sleep(5)
