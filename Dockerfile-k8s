@@ -47,8 +47,8 @@ RUN apt-get update && apt-get install -y procps dumb-init curl && apt-get clean 
 COPY --chown=lev:lev --from=build /app/.venv /app/.venv
 
 COPY --chown=lev:lev app/ app/
-COPY --chown=lev:lev app_settings/ app_settings/
-COPY --chown=lev:lev scripts/ scripts/
+COPY --chown=lev:lev settings/ settings/
+COPY --chown=lev:lev migrations/ migrations/
 COPY --chown=lev:lev workers/ workers/
 COPY --chown=lev:lev logging_config.py ./
 COPY --chown=lev:lev gunicorn.conf.py ./
