@@ -75,6 +75,7 @@ LOCAL_LOGGING_CONFIG = {
         "pymongo": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "aioimaplib": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "asyncio": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
+        "python_multipart": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
     },
 }
 
