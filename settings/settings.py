@@ -37,7 +37,7 @@ class WebhookSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "extra": "allow"}
 
     environment: EnvironmentName = Field(alias="ENVIRONMENT")
     password_encryption_key: str = Field(alias="PASSWORD_ENCRYPTION_KEY")
