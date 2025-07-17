@@ -40,12 +40,9 @@ LOGGING_CONFIG = {
         },
     },
     "loggers": {
-        "": {"handlers": ["jsonStreamHandler"], "propagate": False},
+        "": {"handlers": ["jsonStreamHandler"], "level": settings.logging.level, "propagate": False},
         # werkzeug logging request twice.  This ensures it only logged once (propogate set to false)
-        "werkzeug": {
-            "handlers": ["jsonStreamHandler"],
-            "propagate": False,
-        },
+        "werkzeug": {"handlers": ["jsonStreamHandler"], "propagate": False},
     },
 }
 LOCAL_LOGGING_CONFIG = {
