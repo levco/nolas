@@ -3,7 +3,7 @@ import logging
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
 
-from environment import EnvironmentName
+from app.environment import EnvironmentName
 from settings.log import LoggingSettings
 
 

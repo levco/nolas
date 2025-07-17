@@ -4,7 +4,7 @@ from typing import Any
 
 from pythonjsonlogger.json import JsonFormatter
 
-from environment import EnvironmentName
+from app.environment import EnvironmentName
 from settings import settings
 
 JSON_FORMAT = (

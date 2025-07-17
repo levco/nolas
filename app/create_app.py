@@ -12,8 +12,8 @@ from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
 from app.api.middlewares.auto_commit import AutoCommitMiddleware
 from app.api.routes import api_router
+from app.environment import EnvironmentName
 from app.exceptions import BaseError, ErrorType
-from environment import EnvironmentName
 from settings import settings
 
 logger = logging.getLogger(__name__)
