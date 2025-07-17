@@ -12,10 +12,10 @@ load_dotenv("./.env", override=True)
 from app.container import get_wire_container
 from app.db import fastapi_sqlalchemy_context
 from logging_config import setup_logging
-from models import WorkerConfig
 from settings import settings
 from workers.cluster_manager import IMAPClusterManager
 from workers.imap.imap_worker import start_worker
+from workers.worker_config import WorkerConfig
 
 setup_logging()
 logger = logging.getLogger(__name__)
