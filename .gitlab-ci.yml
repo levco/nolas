@@ -161,9 +161,23 @@ deploy_staging:
     - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
     - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/staging/.dockerconfigjson
     - doppler secrets download --token=$NOLAS_STG_DOPPLER_TOKEN --project nolas --config stg --no-file --format env-no-quotes > k8s/apps/nolas/overlays/staging/nolas.env
+    - cp k8s/apps/nolas/overlays/staging/nolas.env k8s/apps/nolas/overlays/migrations_ci/nolas.env
     - echo $CI_COMMIT_SHA
     - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/staging/kustomization.yaml
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/migrations_ci/kustomization.yaml
     - kubectl -n staging apply -k k8s/apps/common/overlays/staging --kubeconfig $KUBECONFIG_STAGING
+# run migrations
+    - kubectl -n staging apply -k k8s/apps/nolas/overlays/migrations_ci --kubeconfig $KUBECONFIG_STAGING
+    - while ! kubectl -n staging get job nolas-run-migrations --kubeconfig $KUBECONFIG_STAGING; do sleep 5; done
+    - sleep 5
+    - kubectl -n staging wait --for=condition=ready pod --selector=job-name=nolas-run-migrations --timeout=-1s --kubeconfig $KUBECONFIG_STAGING
+    - while ! kubectl -n staging logs -f job/nolas-run-migrations --kubeconfig $KUBECONFIG_STAGING; do sleep 5; done
+    - export NOLAS_MIGRATIONS_POD=$(kubectl --kubeconfig $KUBECONFIG_STAGING -n staging get pods -l service=nolas-run-migrations --template '{{range .items}}{{.metadata.name}}{{end}}')
+    - sleep 2
+    - export NOLAS_MIGRATIONS_POD_EXIT_CODE=$(kubectl --kubeconfig $KUBECONFIG_STAGING -n staging get pod $NOLAS_MIGRATIONS_POD --output json | jq .status.containerStatuses[].state.terminated.exitCode)
+    - echo $NOLAS_MIGRATIONS_POD_EXIT_CODE
+    - if [[ $NOLAS_MIGRATIONS_POD_EXIT_CODE == '0' ]]; then echo "No migration errors found."; else echo "Migration has errors." && (exit 1); fi
+# deploy app
     - kubectl -n staging apply -k k8s/apps/nolas/overlays/staging --kubeconfig $KUBECONFIG_STAGING
     - kubectl -n staging rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_STAGING
   environment:
@@ -186,9 +200,23 @@ deploy_qa:
     - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
     - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/qa/.dockerconfigjson
     - doppler secrets download --token=$NOLAS_QA_DOPPLER_TOKEN --project nolas --config stg_qa --no-file --format env-no-quotes > k8s/apps/nolas/overlays/qa/nolas.env
+    - cp k8s/apps/nolas/overlays/qa/nolas.env k8s/apps/nolas/overlays/migrations_ci/nolas.env
     - echo $CI_COMMIT_SHA
     - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/qa/kustomization.yaml
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/migrations_ci/kustomization.yaml
     - kubectl -n qa apply -k k8s/apps/common/overlays/qa --kubeconfig $KUBECONFIG_QA
+# run migrations
+    - kubectl -n qa apply -k k8s/apps/nolas/overlays/migrations_ci --kubeconfig $KUBECONFIG_QA
+    - while ! kubectl -n qa get job nolas-run-migrations --kubeconfig $KUBECONFIG_QA; do sleep 5; done
+    - sleep 5
+    - kubectl -n qa wait --for=condition=ready pod --selector=job-name=nolas-run-migrations --timeout=-1s --kubeconfig $KUBECONFIG_QA
+    - while ! kubectl -n qa logs -f job/nolas-run-migrations --kubeconfig $KUBECONFIG_QA; do sleep 5; done
+    - export NOLAS_MIGRATIONS_POD=$(kubectl --kubeconfig $KUBECONFIG_QA -n qa get pods -l service=nolas-run-migrations --template '{{range .items}}{{.metadata.name}}{{end}}')
+    - sleep 2
+    - export NOLAS_MIGRATIONS_POD_EXIT_CODE=$(kubectl --kubeconfig $KUBECONFIG_QA -n qa get pod $NOLAS_MIGRATIONS_POD --output json | jq .status.containerStatuses[].state.terminated.exitCode)
+    - echo $NOLAS_MIGRATIONS_POD_EXIT_CODE
+    - if [[ $NOLAS_MIGRATIONS_POD_EXIT_CODE == '0' ]]; then echo "No migration errors found."; else echo "Migration has errors." && (exit 1); fi
+# deploy app
     - kubectl -n qa apply -k k8s/apps/nolas/overlays/qa --kubeconfig $KUBECONFIG_QA
     - kubectl -n qa rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_QA
   environment:
@@ -268,9 +296,23 @@ deploy_production:
     - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
     - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/production/.dockerconfigjson
     - doppler secrets download --token=$NOLAS_PRODUCTION_DOPPLER_TOKEN --project nolas --config prd --no-file --format env-no-quotes > k8s/apps/nolas/overlays/production/nolas.env
+    - cp k8s/apps/nolas/overlays/production/nolas.env k8s/apps/nolas/overlays/migrations/nolas.env
     - echo $CI_COMMIT_SHA
     - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/production/kustomization.yaml
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/migrations/kustomization.yaml
     - kubectl -n production apply -k k8s/apps/common/overlays/production --kubeconfig $KUBECONFIG_PRODUCTION
+# run migrations
+    - kubectl -n production apply -k k8s/apps/nolas/overlays/migrations --kubeconfig $KUBECONFIG_PRODUCTION
+    - while ! kubectl -n dev get job nolas-run-migrations --kubeconfig $KUBECONFIG_PRODUCTION; do sleep 5; done
+    - sleep 5
+    - kubectl -n production wait --for=condition=ready pod --selector=job-name=nolas-run-migrations --timeout=-1s --kubeconfig $KUBECONFIG_PRODUCTION
+    - while ! kubectl -n production logs -f job/nolas-run-migrations --kubeconfig $KUBECONFIG_PRODUCTION; do sleep 5; done
+    - export NOLAS_MIGRATIONS_POD=$(kubectl --kubeconfig $KUBECONFIG_PRODUCTION -n production get pods -l service=nolas-run-migrations --template '{{range .items}}{{.metadata.name}}{{end}}')
+    - sleep 2
+    - export NOLAS_MIGRATIONS_POD_EXIT_CODE=$(kubectl --kubeconfig $KUBECONFIG_PRODUCTION -n production get pod $NOLAS_MIGRATIONS_POD --output json | jq .status.containerStatuses[].state.terminated.exitCode)
+    - echo $NOLAS_MIGRATIONS_POD_EXIT_CODE
+    - if [[ $NOLAS_MIGRATIONS_POD_EXIT_CODE == '0' ]]; then echo "No migration errors found."; else echo "Migration has errors." && (exit 1); fi
+# deploy app
     - kubectl -n production apply -k k8s/apps/nolas/overlays/production --kubeconfig $KUBECONFIG_PRODUCTION
     - kubectl -n production rollout status -w deployments/nolas --kubeconfig $KUBECONFIG_PRODUCTION
   environment:
