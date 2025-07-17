@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from app.controllers.imap.listener import IMAPListener
-from models import WorkerConfig
+from workers.worker_config import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -75,23 +75,6 @@ class IMAPWorker:
                 continue
 
         logger.info(f"Worker {self._worker_id}: Started {self._stats['listeners_started']} total listeners")
-
-    async def get_worker_stats(self) -> dict[str, int | str]:
-        """Get comprehensive worker statistics."""
-        listener_stats = await self._imap_listener.get_listener_stats()
-
-        return {
-            "worker_id": self._worker_id,
-            "accounts_assigned": len(self._accounts),
-            "accounts_loaded": int(self._stats["accounts_loaded"]),
-            "listeners_started": int(self._stats["listeners_started"]),
-            "active_listeners": listener_stats["active_listeners"],
-            "failed_listeners": listener_stats["failed_listeners"],
-            "active_tasks": len([t for t in self._active_tasks if not t.done()]),
-            "emails_processed": int(self._stats["emails_processed"]),
-            "connection_errors": int(self._stats["connection_errors"]),
-            "startup_time": int(self._stats["startup_time"]),
-        }
 
     async def _cleanup(self) -> None:
         """Clean up all resources."""

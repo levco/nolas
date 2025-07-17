@@ -6,9 +6,9 @@ from typing import Sequence
 from app.controllers.imap.listener import IMAPListener
 from app.models.account import Account
 from app.repos.account import AccountRepo
-from models import WorkerConfig
 from settings import settings
 from workers.imap.imap_worker import start_worker_blocking
+from workers.worker_config import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
