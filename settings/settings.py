@@ -19,6 +19,11 @@ class DatabaseSettings(BaseSettings):
         return self.host.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+class SentrySettings(BaseSettings):
+    is_enabled: bool = Field(alias="SENTRY_ENABLED", default=False)
+    dsn: str = Field(alias="SENTRY_DSN", default="")
+
+
 class WorkerSettings(BaseSettings):
     num_workers: int = Field(alias="WORKERS_NUM", default=2)
     max_connections_per_provider: int = Field(alias="WORKER_MAX_CONNECTIONS_PER_PROVIDER", default=50)
@@ -45,6 +50,7 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     imap: IMAPSettings = Field(default_factory=IMAPSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    sentry: SentrySettings = Field(default_factory=SentrySettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
 

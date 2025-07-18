@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 load_dotenv("./.env", override=True)
 
+import sentry_sdk
+
 from app.container import get_wire_container
 from app.db import fastapi_sqlalchemy_context
 from logging_config import setup_logging
@@ -18,10 +20,11 @@ from workers.cluster_manager import IMAPClusterManager
 from workers.imap.imap_worker import start_worker
 from workers.worker_config import WorkerConfig
 
-setup_logging()
+if settings.sentry.is_enabled:
+    sentry_sdk.init(dsn=settings.sentry.dsn, environment=settings.environment.value)
+
 logger = logging.getLogger(__name__)
-
-
+setup_logging()
 container = get_wire_container()
 
 
