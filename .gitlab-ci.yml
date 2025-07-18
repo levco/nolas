@@ -122,13 +122,13 @@ deploy_dev:
     - if git ls-remote --exit-code --heads https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git $CI_COMMIT_REF_NAME; then git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git --branch $CI_COMMIT_REF_NAME && echo "Checking out associated k8s branch $CI_COMMIT_REF_NAME"; else git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/lev-infra/k8s.git && echo "No associated k8s branch, checking out master"; fi
     - echo $DOCKER_AUTH_CONFIG > k8s/apps/common/overlays/dev/.dockerconfigjson
     - doppler secrets download --token=$NOLAS_DEV_AWS_DOPPLER_TOKEN --project nolas --config dev_aws --no-file --format env-no-quotes > k8s/apps/nolas/overlays/dev/nolas.env
-    - cp k8s/apps/nolas/overlays/dev/nolas.env k8s/apps/nolas/overlays/migrations_ci/nolas.env
+    - cp k8s/apps/nolas/overlays/dev/nolas.env k8s/apps/nolas/overlays/migrations/nolas.env
     - echo $CI_COMMIT_SHA
     - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/dev/kustomization.yaml
-    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/migrations_ci/kustomization.yaml
+    - yq eval -i '.images[0].newTag = strenv(CI_COMMIT_SHA)' k8s/apps/nolas/overlays/migrations/kustomization.yaml
     - kubectl -n dev apply -k k8s/apps/common/overlays/dev --kubeconfig $KUBECONFIG_CI
 # run migrations
-    - kubectl -n dev apply -k k8s/apps/nolas/overlays/migrations_ci --kubeconfig $KUBECONFIG_CI
+    - kubectl -n dev apply -k k8s/apps/nolas/overlays/migrations --kubeconfig $KUBECONFIG_CI
     - while ! kubectl -n dev get job nolas-run-migrations --kubeconfig $KUBECONFIG_CI; do sleep 5; done
     - sleep 5
     - kubectl -n dev wait --for=condition=ready pod --selector=job-name=nolas-run-migrations --timeout=-1s --kubeconfig $KUBECONFIG_CI
