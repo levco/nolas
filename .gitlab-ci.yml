@@ -303,7 +303,7 @@ deploy_production:
     - kubectl -n production apply -k k8s/apps/common/overlays/production --kubeconfig $KUBECONFIG_PRODUCTION
 # run migrations
     - kubectl -n production apply -k k8s/apps/nolas/overlays/migrations --kubeconfig $KUBECONFIG_PRODUCTION
-    - while ! kubectl -n dev get job nolas-run-migrations --kubeconfig $KUBECONFIG_PRODUCTION; do sleep 5; done
+    - while ! kubectl -n production get job nolas-run-migrations --kubeconfig $KUBECONFIG_PRODUCTION; do sleep 5; done
     - sleep 5
     - kubectl -n production wait --for=condition=ready pod --selector=job-name=nolas-run-migrations --timeout=-1s --kubeconfig $KUBECONFIG_PRODUCTION
     - while ! kubectl -n production logs -f job/nolas-run-migrations --kubeconfig $KUBECONFIG_PRODUCTION; do sleep 5; done
