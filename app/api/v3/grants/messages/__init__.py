@@ -86,7 +86,7 @@ async def get_message(
 
 
 @router.get(
-    "/",
+    "",
     response_model=MessageListResponse,
     responses={
         400: {"model": APIError, "description": "Invalid parameter or bad request"},
@@ -99,7 +99,6 @@ async def get_message(
 async def list_messages(
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
     app: App = Depends(get_current_app),
     message_controller: MessageController = Depends(Provide[ApplicationContainer.controllers.imap_message_controller]),
 ) -> MessageListResponse | JSONResponse:
