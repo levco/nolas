@@ -74,7 +74,7 @@ class MessageUtils:
                 if "attachment" in content_disposition:
                     continue
 
-                if content_type == "text/html" and not body:
+                if content_type == "text/html":
                     payload = part.get_payload(decode=True)
                     if payload:
                         if isinstance(payload, bytes):
@@ -85,7 +85,7 @@ class MessageUtils:
                                 body = payload.decode("utf-8", errors="ignore")
                         else:
                             body = str(payload)
-                elif content_type == "text/plain":
+                elif content_type == "text/plain" and not body:
                     # Use plain text as fallback if no HTML.
                     payload = part.get_payload(decode=True)
                     if payload:
