@@ -85,6 +85,7 @@ class MessageUtils:
                                 body = payload.decode("utf-8", errors="ignore")
                         else:
                             body = str(payload)
+                        break
                 elif content_type == "text/plain" and not body:
                     # Use plain text as fallback if no HTML.
                     payload = part.get_payload(decode=True)
@@ -97,7 +98,6 @@ class MessageUtils:
                                 body = payload.decode("utf-8", errors="ignore")
                         else:
                             body = str(payload)
-                    break
         else:
             # Single part message
             payload = msg.get_payload(decode=True)
