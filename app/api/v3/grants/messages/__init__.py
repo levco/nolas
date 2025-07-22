@@ -198,10 +198,8 @@ async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest
     attachments: list[AttachmentData] = []
     message_json: dict[str, Any] | None = None
 
-    # Parse multipart form data
     form = await request.form()
-
-    for field_name, field_value in form.items():
+    for field_name, field_value in form.multi_items():
         if field_name == "Message":
             # Parse the JSON message data
             if isinstance(field_value, str):
