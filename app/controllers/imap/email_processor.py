@@ -13,6 +13,7 @@ import aiohttp
 
 from app.api.payloads.messages import Message
 from app.models import Account, WebhookLog
+from app.repos.email import EmailRepo
 from app.repos.webhook_log import WebhookLogRepo
 from app.utils.message_utils import MessageUtils
 from settings import settings
@@ -21,11 +22,12 @@ from settings import settings
 class EmailProcessor:
     """Processes new emails and sends webhooks with retry logic."""
 
-    def __init__(self, webhook_log_repo: WebhookLogRepo) -> None:
+    def __init__(self, webhook_log_repo: WebhookLogRepo, email_repo: EmailRepo) -> None:
         self._logger = logging.getLogger(__name__)
         self._http_session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
         self._webhook_log_repo = webhook_log_repo
+        self._email_repo = email_repo
 
     async def init_session(self) -> None:
         """Initialize HTTP session for webhook delivery."""
@@ -61,6 +63,13 @@ class EmailProcessor:
         """Process a new email and send webhook."""
 
         nylas_message = MessageUtils.convert_to_nylas_format(msg=raw_message, grant_id=account.uuid, folder=folder)
+        if nylas_message.id and await self._email_repo.get_by_account_and_email_id(account.id, nylas_message.id):
+            self._logger.info(
+                f"Message already exists in cache. It was likely sent via our API; account: {account.email}, "
+                f"email_id: {nylas_message.id}"
+            )
+            return nylas_message
+
         await self.send_webhook_with_retry(account, folder, uid, nylas_message)
         self._logger.info(f"Processed email UID {uid} for {account.email}:{folder}")
         return nylas_message

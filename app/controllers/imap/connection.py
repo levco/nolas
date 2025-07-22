@@ -104,7 +104,7 @@ class ConnectionManager:
             return connection
 
         except Exception:
-            self._logger.warning(f"Failed to create IMAP connection for {account.email}", stack_info=True)
+            self._logger.warning(f"Failed to create IMAP connection for {account.email}", exc_info=True)
             raise
 
     async def close_connection(self, connection: IMAP4_SSL, account: Account) -> None:

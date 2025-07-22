@@ -287,20 +287,23 @@ class IMAPListener:
             # Fetch message data for each UID
             fetch_response = await connection.fetch(",".join(map(str, new_uids)), "RFC822")
             messages = self._parse_fetch_response(fetch_response)
-
             for uid, message_bytes in messages.items():
-                raw_message = email.message_from_bytes(message_bytes)
-                nylas_message = await self._email_processor.process_email(account, folder, uid, raw_message)
+                try:
+                    raw_message = email.message_from_bytes(message_bytes)
+                    nylas_message = await self._email_processor.process_email(account, folder, uid, raw_message)
 
-                # Update UID tracking
-                await self._update_last_seen_uid(account.id, folder, uid)
-                await self._upsert_cache(account, raw_message, folder, uid, nylas_message.thread_id)
+                    # Update UID tracking
+                    await self._update_last_seen_uid(account.id, folder, uid)
+                    await self._upsert_cache(account, raw_message, folder, uid, nylas_message.thread_id)
+                except Exception:
+                    self._logger.warning(f"Failed to process message {uid} for {account.email}:{folder}", exc_info=True)
+                    continue
 
             self._logger.info(f"Processed {len(new_uids)} new messages for {account.email}:{folder}")
             await self._uid_tracking_repo.commit()
 
-        except Exception as e:
-            self._logger.error(f"Failed to process new messages for {account.email}:{folder}: {e}")
+        except Exception:
+            self._logger.warning(f"Failed to process new messages for {account.email}:{folder}", exc_info=True)
             raise
 
     def _parse_search_response(self, search_response: Response) -> list[int]:

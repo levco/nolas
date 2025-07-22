@@ -16,7 +16,9 @@ from app.repos.container import RepoContainer
 class ControllerContainer(containers.DeclarativeContainer):
     repos: RepoContainer = cast(RepoContainer, providers.DependenciesContainer())
 
-    imap_email_processor = providers.Singleton(EmailProcessor, webhook_log_repo=repos.webhook_log)
+    imap_email_processor = providers.Singleton(
+        EmailProcessor, webhook_log_repo=repos.webhook_log, email_repo=repos.email
+    )
     imap_connection_manager = providers.Singleton(ConnectionManager)
     imap_message_controller = providers.Singleton(MessageController, connection_manager=imap_connection_manager)
     imap_listener = providers.Singleton(
