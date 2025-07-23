@@ -241,8 +241,15 @@ class IMAPListener:
 
                 # Check if we should stop this folder
                 if consecutive_failures >= max_failures:
-                    self._logger.error(f"Max failures reached for {account.email}:{folder}, stopping polling")
-                    break
+                    self._logger.error(
+                        f"Max failures reached for {account.email}:{folder}. Check if something is wrong with the "
+                        "account."
+                    )
+                    for _ in range(poll_interval * 20):
+                        if self._shutdown_event.is_set():
+                            return
+                        await asyncio.sleep(0.1)
+                    continue
 
                 # Exponential backoff for errors, but not too long
                 backoff_time = min(120, 10 * consecutive_failures)  # Max 2 minutes
