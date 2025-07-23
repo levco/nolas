@@ -12,6 +12,7 @@ from uuid import UUID
 import aiohttp
 
 from app.api.payloads.messages import Message
+from app.constants.emails import SENT_FOLDERS
 from app.models import Account, WebhookLog
 from app.repos.email import EmailRepo
 from app.repos.webhook_log import WebhookLogRepo
@@ -63,7 +64,8 @@ class EmailProcessor:
         """Process a new email and send webhook."""
 
         nylas_message = MessageUtils.convert_to_nylas_format(msg=raw_message, grant_id=account.uuid, folder=folder)
-        if nylas_message.id and await self._email_repo.get_by_account_and_email_id(account.id, nylas_message.id):
+        cached_email = await self._email_repo.get_by_account_and_email_id(account.id, nylas_message.id)
+        if cached_email and cached_email.folder in SENT_FOLDERS:
             self._logger.info(
                 f"Message already exists in cache. It was likely sent via our API; account: {account.email}, "
                 f"email_id: {nylas_message.id}"
