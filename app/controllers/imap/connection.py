@@ -98,7 +98,20 @@ class ConnectionManager:
                 return None
 
             if folder:
-                await connection.select(folder)
+                # Quote folder names that contain spaces or special characters
+                # IMAP requires folder names with spaces to be quoted
+                quoted_folder = (
+                    f'"{folder}"'
+                    if " " in folder or any(c in folder for c in ["(", ")", "{", "}", "%", "*", '"', "\\"])
+                    else folder
+                )
+                select_response = await connection.select(quoted_folder)
+                if select_response.result != "OK":
+                    self._logger.error(
+                        f"Failed to select folder '{folder}' (as {quoted_folder}) for {account.email}: {select_response.result}"
+                    )
+                    await self.close_connection(connection, account)
+                    raise ValueError(f"Failed to select folder '{folder}': {select_response.result}")
 
             self._logger.debug(f"Created new IMAP connection for {account.email}:{folder}")
             return connection
