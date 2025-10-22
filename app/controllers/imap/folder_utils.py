@@ -37,19 +37,17 @@ class FolderUtils:
                 if b"LIST completed" in line or b"OK" in line:
                     continue
 
-                # Parse folder from response like: b'(\\Archive) "." "Archive"'
-                if isinstance(line, bytes) and b'"' in line:
-                    parts = line.split(b'"')
-                    if len(parts) >= 3:
-                        folder_name = parts[-2].decode("utf-8")
-                        # TODO: Allow selecting what folders to include in a user?
-                        # Ignore these folders by default.
-                        if folder_name.lower() in ["drafts", "junk", "archive", "trash"]:
-                            continue
+                # Parse folder from response like: b'(\\Archive) "." "Archive"' or b'(\\HasNoChildren) "/" INBOX'
+                folder_name = FolderUtils.parse_folder_from_list_response(line)
+                if folder_name:
+                    # TODO: Allow selecting what folders to include in a user?
+                    # Ignore these folders by default.
+                    if folder_name.lower() in ["drafts", "junk", "archive", "trash", "spam"]:
+                        continue
 
-                        # Skip empty folder names
-                        if folder_name.strip():
-                            folders.append(folder_name)
+                    # Skip empty folder names
+                    if folder_name.strip():
+                        folders.append(folder_name)
 
             await connection_manager.close_connection(connection, account)
 
@@ -78,15 +76,47 @@ class FolderUtils:
             Folder name or None if parsing fails
         """
         try:
-            if not isinstance(line, bytes) or b'"' not in line:
+            if not isinstance(line, bytes):
                 return None
 
             # Extract folder name from IMAP LIST response
-            # Format: (flags) "delimiter" "folder_name"
-            parts = line.split(b'"')
-            if len(parts) >= 3:
-                folder_name = parts[-2].decode("utf-8")
-                return folder_name.strip() if folder_name.strip() else None
+            # Format: (flags) "delimiter" "folder_name" OR (flags) "delimiter" folder_name
+            # Example: b'(\\Drafts \\HasNoChildren) "/" Drafts'
+            # Example: b'(\\Sent \\HasNoChildren) "/" "Sent Items"'
+
+            # Find the end of flags (closing parenthesis)
+            flags_end = line.find(b")")
+            if flags_end == -1:
+                return None
+
+            # Everything after the flags
+            after_flags = line[flags_end + 1 :].strip()
+
+            # Find the delimiter (first quoted string)
+            # The delimiter is always quoted, e.g., "/"
+            first_quote = after_flags.find(b'"')
+            if first_quote == -1:
+                return None
+
+            # Find the closing quote of the delimiter
+            second_quote = after_flags.find(b'"', first_quote + 1)
+            if second_quote == -1:
+                return None
+
+            # Everything after the delimiter is the folder name
+            folder_part = after_flags[second_quote + 1 :].strip()
+
+            if not folder_part:
+                return None
+
+            # If folder name is quoted, extract it
+            if folder_part.startswith(b'"') and folder_part.endswith(b'"'):
+                folder_name = folder_part[1:-1].decode("utf-8")
+            else:
+                # Unquoted folder name
+                folder_name = folder_part.decode("utf-8")
+
+            return folder_name.strip() if folder_name.strip() else None
 
         except Exception as e:
             logger.warning(f"Failed to parse folder from line {line.decode('utf-8', errors='ignore')}: {e}")

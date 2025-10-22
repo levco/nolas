@@ -12,3 +12,6 @@ revision:
 
 downgrade:
 	docker exec -it $(BE) alembic downgrade -1
+
+imap-debug-shell:
+	docker exec -it $(BE) env PYTHONSTARTUP=app/debug/debug_startup.py python -m asyncio
