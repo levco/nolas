@@ -55,7 +55,7 @@ class ConnectionManager:
         self._connection_limit = 10
 
         # TODO: Make dynamic.
-        IMAP_HOSTS = ["imap.purelymail.com"]
+        IMAP_HOSTS = ["imap.purelymail.com", "imap.ionos.com"]
 
         for imap_host in IMAP_HOSTS:
             self._connection_locks[imap_host] = asyncio.Semaphore(self._connection_limit)
