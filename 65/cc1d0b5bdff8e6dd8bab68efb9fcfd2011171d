@@ -1,0 +1,128 @@
+app/api/v3/grants/messages/__init__.py
+  s_a7e917b8017cac::t_6ae3bf742db1f7 146
+  s_a7e917b8017cac::t_de65bc3fa6ab02 16-19,22,26,28-30,32-33,35,44,59,69,71-72,79-81,83,98,110-119,121,131-145,147-159,178-179,199-200,205,212-237,249-250
+app/controllers/providers/http.py
+  s_a7e917b8017cac::t_eaec37ed23392c 1-95
+app/controllers/providers/microsoft/graph_client.py
+  s_a7e917b8017cac::t_b0025b73927471 1-342
+app/controllers/grant/custom_auth_controller.py
+  s_a7e917b8017cac::t_6ae3bf742db1f7 36
+  s_a7e917b8017cac::t_fc912700f319ce 1-35,37-122
+app/api/v3/grants/folders/__init__.py
+  s_a7e917b8017cac::t_2bd92ee4c103fe 1-5,8,11-15,17,26,32,36-37,39-72
+app/controllers/providers/google/gmail_client.py
+  s_a7e917b8017cac::t_6ae3bf742db1f7 148-154,216,238
+  s_a7e917b8017cac::t_60b02b57541627 1-147,155-215,217-237,239-245
+app/api/v3/providers.py
+  s_a7e917b8017cac::t_533057a4d68ee0 1-74
+app/models/app.py
+  s_a7e917b8017cac::t_3e3adf7e3d6761 16-18
+app/api/v3/notifications.py
+  s_a7e917b8017cac::t_1071e48fe63cb0 1-85
+app/controllers/providers/microsoft/query.py
+  s_a7e917b8017cac::t_ecc506f4cfceef 1-51
+app/controllers/notifications/subscription_manager.py
+  s_a7e917b8017cac::t_925f288c81dfd0 91,93
+  s_a7e917b8017cac::t_c1aeba36628cc6 1-90,92,94-105
+pyproject.toml
+  s_a7e917b8017cac::t_39cdbed593d178 29
+app/api/utils/errors.py
+  s_a7e917b8017cac::t_e94e0de27ec52e 43-53
+  s_a7e917b8017cac::t_bb332f62a4d8a5 2,13-14
+app/controllers/providers/token_service.py
+  s_a7e917b8017cac::t_c7b091af679d0a 1-49,51-53,55-62,64-152
+  s_a7e917b8017cac::t_f5b225dfda5b1e 50,54,63
+app/controllers/providers/mime.py
+  s_a7e917b8017cac::t_a02b53995bbc05 1-58
+app/controllers/providers/microsoft/mapper.py
+  s_a7e917b8017cac::t_a97848fd49fdc2 1-65,67-91
+  s_a7e917b8017cac::t_6ae3bf742db1f7 66
+settings/settings.py
+  s_a7e917b8017cac::t_7cb0d189a0daa9 91-94
+  s_a7e917b8017cac::t_491d5dc6c4c95c 44-78
+tests/test_mime.py
+  s_a7e917b8017cac::t_6ae3bf742db1f7 44
+  s_a7e917b8017cac::t_763a90ad04f054 1-43,45-47
+app/controllers/providers/google/mapper.py
+  s_a7e917b8017cac::t_1d75f69cd99765 1-145
+app/api/v3/grants/__init__.py
+  s_a7e917b8017cac::t_6ae3bf742db1f7 138
+  s_a7e917b8017cac::t_f83608552f7762 5,14-15,17,19-21,28,37-119
+  s_a7e917b8017cac::t_c35376c677b7d7 158-159
+workers/subscription_renewal.py
+  s_a7e917b8017cac::t_536e28176dae46 1-45,47-91
+  s_a7e917b8017cac::t_6ae3bf742db1f7 46
+app/controllers/notifications/incoming_controller.py
+  s_a7e917b8017cac::t_1d61a20b805a65 1-141,150,156-165
+  s_a7e917b8017cac::t_20a47a40941b7d 142-149,151-155
+app/controllers/providers/google/query.py
+  s_a7e917b8017cac::t_24fb2fafc41fbe 1-17,19-34
+  s_a7e917b8017cac::t_6ae3bf742db1f7 18
+app/controllers/providers/exceptions.py
+  s_a7e917b8017cac::t_aabc4c38faa2c4 1-29
+app/models/account.py
+  s_a7e917b8017cac::t_c6eae8dfdce6ed 18-19,26-35,47-49,59-61
+app/controllers/webhooks/sender.py
+  s_a7e917b8017cac::t_4f0904075f908d 1-114,116-162
+  s_a7e917b8017cac::t_6ae3bf742db1f7 115
+app/controllers/providers/registry.py
+  s_a7e917b8017cac::t_4056e61dc8334f 1-34
+tests/test_gmail_mapper.py
+  s_a7e917b8017cac::t_1dea4777db6aa3 1-122
+app/controllers/container.py
+  s_a7e917b8017cac::t_7b3eddd15d6c1a 7,13-20,22,24,66-116
+docker-compose.yml
+  s_a7e917b8017cac::t_68b3cb9eb622f0 36-47
+app/api/payloads/folders.py
+  s_a7e917b8017cac::t_12cf2f4ce54002 14-15
+tests/test_gmail_query.py
+  s_a7e917b8017cac::t_92728af948b47f 1-31
+tests/test_graph_query.py
+  s_a7e917b8017cac::t_c9148823efcb73 1-48
+tests/test_bounce.py
+  s_a7e917b8017cac::t_001255a82c334e 1-54
+app/api/payloads/grants.py
+  s_a7e917b8017cac::t_627b59c2c94561 5-6,15-61
+app/controllers/providers/base.py
+  s_a7e917b8017cac::t_f215d89bd19d4f 1-94
+tests/test_graph_mapper.py
+  s_a7e917b8017cac::t_a611b494c7aa9e 1-49,52-89
+  s_a7e917b8017cac::t_1d63ed958d0799 50-51
+migrations/versions/20260609_100000_a1b2c3d4e5f6_google_microsoft_providers.py
+  s_a7e917b8017cac::t_8c36647fdcdbd7 1-57
+app/models/webhook_log.py
+  s_a7e917b8017cac::t_a385fedd4af173 20-21
+app/repos/account.py
+  s_a7e917b8017cac::t_83c91a8edaf872 29-36,39-44,47-52,55-58
+  s_a7e917b8017cac::t_5d61dbf46c41fc 7
+  s_a7e917b8017cac::t_6ae3bf742db1f7 37-38,45-46,53-54
+app/controllers/notifications/bounce.py
+  s_a7e917b8017cac::t_b2da73a7c8a663 1-49
+app/api/v3/grants/attachments/__init__.py
+  s_a7e917b8017cac::t_5454a1611700e2 16,18-19,45,50,53,55-86,112,120,123,126-127,135-136,142,147-148
+app/controllers/providers/imap_adapter.py
+  s_a7e917b8017cac::t_efd4283c1a5f33 1-190
+app/api/v3/connect.py
+  s_a7e917b8017cac::t_29693209e38bcc 253-319
+  s_a7e917b8017cac::t_243d47fa7c0dd0 17,19,22-24
+app/api/routes.py
+  s_a7e917b8017cac::t_73cf57e73b9511 5-6,12-13
+app/api/payloads/messages.py
+  s_a7e917b8017cac::t_b564ef9017fb9b 23-24,53-59,71-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "65cc1d0b5bdff8e6dd8bab68efb9fcfd2011171d",
+  "prompts": {},
+  "sessions": {
+    "s_a7e917b8017cac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7dffe0d3-1d52-434d-9071-c57d2277b47d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Alberto Sheinfeld <825651+asheinfeld@users.noreply.github.com>"
+    }
+  }
+}
