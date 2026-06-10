@@ -11,6 +11,8 @@ class Folder(BaseModel):
     name: str
     system_folder: bool = True
     attributes: list[str] = Field(default_factory=list)
+    total_count: int | None = None
+    unread_count: int | None = None
 
 
 class FolderResponse(BaseModel):

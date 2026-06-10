@@ -13,3 +13,6 @@ class App(Base, WithUUID, TimestampMixin):
     api_key: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     webhook_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)
     webhook_secret: Mapped[str] = mapped_column(sa.String(255), nullable=True)
+    grant_webhook_url: Mapped[str | None] = mapped_column(
+        sa.String(255), nullable=True, comment="Destination for grant.* lifecycle events; falls back to webhook_url"
+    )

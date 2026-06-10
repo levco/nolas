@@ -1,5 +1,5 @@
 import uuid
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import status
@@ -9,6 +9,9 @@ from app.api.payloads.error import APIError, ErrorDetail
 from app.container import ApplicationContainer
 from app.models.account import Account
 from app.repos.account import AccountRepo
+
+if TYPE_CHECKING:
+    from app.controllers.providers.exceptions import ProviderError
 
 
 class _ProviderError(TypedDict):
@@ -35,6 +38,17 @@ def create_error_response(
         request_id=str(uuid.uuid4()), error=ErrorDetail(type=error_type, message=message, provider_error=provider_error)
     )
     return JSONResponse(status_code=status_code, content=error_response.model_dump())
+
+
+def provider_error_response(error: "ProviderError") -> JSONResponse:
+    """Map a ProviderError to a Nylas-shaped error response."""
+    error_types = {401: "provider_error", 404: "not_found_error", 429: "provider_error"}
+    return create_error_response(
+        error_type=error_types.get(error.status_code, "provider_error"),
+        message=error.message,
+        status_code=error.status_code,
+        provider_error={"code": error.provider_code or "ProviderError", "message": error.message},
+    )
 
 
 @inject

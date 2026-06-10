@@ -17,8 +17,8 @@ class WebhookLog(Base, TimestampMixin, WithUUID):
 
     app_id: Mapped[int] = mapped_column(sa.ForeignKey("apps.id"), nullable=False, index=True)
     account_id: Mapped[int] = mapped_column(sa.ForeignKey("accounts.id"), nullable=False, index=True)
-    folder: Mapped[str] = mapped_column(sa.String(255), nullable=False)
-    uid: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    folder: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    uid: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     webhook_url: Mapped[str] = mapped_column(sa.Text, nullable=False)
     status_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     response_body: Mapped[str | None] = mapped_column(sa.Text, nullable=True)

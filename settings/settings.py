@@ -41,6 +41,41 @@ class WebhookSettings(BaseSettings):
     timeout: int = Field(alias="WEBHOOK_TIMEOUT", default=10)
 
 
+class ApiSettings(BaseSettings):
+    # Public HTTPS base URL of this service (no trailing slash). Required for Microsoft Graph
+    # change-notification subscriptions and referenced by Google Pub/Sub push configuration.
+    public_base_url: str = Field(alias="API_PUBLIC_BASE_URL", default="")
+
+
+class GoogleProviderSettings(BaseSettings):
+    client_id: str = Field(alias="GOOGLE_CLIENT_ID", default="")
+    client_secret: str = Field(alias="GOOGLE_CLIENT_SECRET", default="")
+    # Fully-qualified Pub/Sub topic for Gmail watch, e.g. projects/<project>/topics/<topic>.
+    pubsub_topic: str = Field(alias="GOOGLE_PUBSUB_TOPIC", default="")
+    # Shared secret expected as ?token= on the Pub/Sub push endpoint.
+    pubsub_verification_token: str = Field(alias="GOOGLE_PUBSUB_VERIFICATION_TOKEN", default="")
+    request_timeout: int = Field(alias="GOOGLE_REQUEST_TIMEOUT", default=30)
+
+
+class MicrosoftProviderSettings(BaseSettings):
+    client_id: str = Field(alias="MICROSOFT_CLIENT_ID", default="")
+    client_secret: str = Field(alias="MICROSOFT_CLIENT_SECRET", default="")
+    authority: str = Field(alias="MICROSOFT_AUTHORITY", default="https://login.microsoftonline.com/common")
+    scopes: str = Field(
+        alias="MICROSOFT_SCOPES",
+        default="offline_access https://graph.microsoft.com/User.Read "
+        "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send",
+    )
+    request_timeout: int = Field(alias="MICROSOFT_REQUEST_TIMEOUT", default=30)
+
+
+class SubscriptionRenewalSettings(BaseSettings):
+    # How often the renewal worker scans accounts, in seconds.
+    poll_interval: int = Field(alias="SUBSCRIPTION_RENEWAL_POLL_INTERVAL", default=3600)
+    # Renew watches/subscriptions expiring within this many hours.
+    renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
+
+
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "allow"}
 
@@ -53,6 +88,10 @@ class Settings(BaseSettings):
     sentry: SentrySettings = Field(default_factory=SentrySettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
+    google: GoogleProviderSettings = Field(default_factory=GoogleProviderSettings)
+    microsoft: MicrosoftProviderSettings = Field(default_factory=MicrosoftProviderSettings)
+    subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:
