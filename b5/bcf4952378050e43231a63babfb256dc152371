@@ -1,0 +1,53 @@
+settings/settings.py
+  s_a7e917b8017cac::t_0998705d5c75d6 72-76,109
+  s_a7e917b8017cac::t_9cb5f54b61867f 77-84,108
+app/repos/account.py
+  s_a7e917b8017cac::t_7deb81daffddc7 4,65-81
+app/create_app.py
+  s_a7e917b8017cac::t_1b8e6cb9300083 15,53,57,59-61,63-65
+  s_a7e917b8017cac::t_4355ad61b59449 58,62,66
+main.py
+  s_a7e917b8017cac::t_1b8e6cb9300083 13
+tests/test_notification_queue.py
+  s_a7e917b8017cac::t_70b65083658fe5 1-85
+workers/subscription_renewal.py
+  s_a7e917b8017cac::t_5eae71067a0a3b 67-81
+app/repos/email.py
+  s_a7e917b8017cac::t_12b7508b9f5e44 1-4,32-37
+app/api/v3/notifications.py
+  s_a7e917b8017cac::t_1a142a0a45babc 19,37,55-63,77,91-93
+app/controllers/providers/token_service.py
+  s_a7e917b8017cac::t_f969bf16423f0c 59-66
+app/controllers/notifications/queue.py
+  s_a7e917b8017cac::t_5c931da2d04d33 1-103
+app/controllers/container.py
+  s_a7e917b8017cac::t_0998705d5c75d6 14,119-124
+Makefile
+  s_25f77fb873a009::t_640bc85193ba24 3-8
+app/repos/webhook_log.py
+  s_a7e917b8017cac::t_12b7508b9f5e44 1-5,15-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b5bcf4952378050e43231a63babfb256dc152371",
+  "prompts": {},
+  "sessions": {
+    "s_25f77fb873a009": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4014d68e-ea86-4b95-857e-c8b57169a990",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Alberto Sheinfeld <825651+asheinfeld@users.noreply.github.com>"
+    },
+    "s_a7e917b8017cac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7dffe0d3-1d52-434d-9071-c57d2277b47d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Alberto Sheinfeld <825651+asheinfeld@users.noreply.github.com>"
+    }
+  }
+}
