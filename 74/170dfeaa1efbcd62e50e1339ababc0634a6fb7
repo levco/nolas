@@ -1,0 +1,21 @@
+app/controllers/providers/http.py
+  s_a7e917b8017cac::t_cf638ae6b9b7fd 78,81-83,94-97
+app/controllers/notifications/queue.py
+  s_a7e917b8017cac::t_cf638ae6b9b7fd 102-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "74170dfeaa1efbcd62e50e1339ababc0634a6fb7",
+  "prompts": {},
+  "sessions": {
+    "s_a7e917b8017cac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7dffe0d3-1d52-434d-9071-c57d2277b47d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Alberto Sheinfeld <825651+asheinfeld@users.noreply.github.com>"
+    }
+  }
+}
