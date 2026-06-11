@@ -99,7 +99,11 @@ class NotificationQueue:
                         f"[worker-{worker_id}] {job.kind} notification failed "
                         f"(attempt {job.attempts}/{MAX_JOB_ATTEMPTS}); re-enqueueing"
                     )
-                    self.try_enqueue(job)
+                    if not self.try_enqueue(job):
+                        logger.error(
+                            f"[worker-{worker_id}] queue full; dropping {job.kind} notification "
+                            f"after {job.attempts} attempt(s)"
+                        )
                 else:
                     logger.exception(
                         f"[worker-{worker_id}] dropping {job.kind} notification after {job.attempts} attempts"

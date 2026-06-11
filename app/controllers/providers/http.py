@@ -75,10 +75,12 @@ class AuthorizedHttpClient:
                         await self._token_service.handle_auth_failure(account)
                         raise
                     continue
-                return await self._handle_response(account, response, expect_json)
+                return await self._handle_response(account, response, expect_json, include_auth)
         raise ProviderError("Unreachable")  # pragma: no cover
 
-    async def _handle_response(self, account: Account, response: aiohttp.ClientResponse, expect_json: bool) -> Any:
+    async def _handle_response(
+        self, account: Account, response: aiohttp.ClientResponse, expect_json: bool, include_auth: bool = True
+    ) -> Any:
         if 200 <= response.status < 300:
             if response.status == 204 or not expect_json:
                 return await response.read()
@@ -89,6 +91,10 @@ class AuthorizedHttpClient:
 
         body_text = await response.text()
         if response.status == 401:
+            if not include_auth:
+                # Pre-authenticated URL (e.g. Graph upload session) rejected its own
+                # token — not a grant credential failure; do not expire the grant.
+                raise ProviderError(f"Pre-authenticated request rejected (401): {body_text[:500]}", status_code=401)
             await self._token_service.handle_auth_failure(account)
             raise ProviderAuthError(f"Provider rejected credentials: {body_text[:500]}")
         if response.status == 404:
