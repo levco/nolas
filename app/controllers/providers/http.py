@@ -50,20 +50,25 @@ class AuthorizedHttpClient:
         data: bytes | None = None,
         headers: dict[str, str] | None = None,
         expect_json: bool = True,
+        include_auth: bool = True,
     ) -> Any:
-        try:
-            access_token = await self._token_service.get_access_token(account)
-        except ProviderAuthError:
-            await self._token_service.handle_auth_failure(account)
-            raise
+        access_token = ""
+        if include_auth:
+            try:
+                access_token = await self._token_service.get_access_token(account)
+            except ProviderAuthError:
+                await self._token_service.handle_auth_failure(account)
+                raise
 
         for attempt in (1, 2):
-            request_headers = {"Authorization": f"Bearer {access_token}", **(headers or {})}
+            request_headers = dict(headers or {})
+            if include_auth:
+                request_headers = {"Authorization": f"Bearer {access_token}", **request_headers}
             session = await self._get_session()
             async with session.request(
                 method, url, params=params, json=json_body, data=data, headers=request_headers
             ) as response:
-                if response.status == 401 and attempt == 1:
+                if response.status == 401 and attempt == 1 and include_auth:
                     try:
                         access_token = await self._token_service.get_access_token(account, force_refresh=True)
                     except ProviderAuthError:

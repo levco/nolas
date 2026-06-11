@@ -57,6 +57,8 @@ async def get_folder(
                 name=folder.name,
                 grant_id=grant_id,
                 attributes=folder.attributes,
+                # Gmail labels carry a type attribute; user labels are not system folders.
+                system_folder="user" not in folder.attributes,
                 total_count=folder.total_count,
                 unread_count=folder.unread_count,
             ),

@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from app.controllers.notifications.bounce import detect_bounce
 from app.controllers.providers.exceptions import ProviderAuthError, ProviderError, ProviderNotFoundError
 from app.controllers.providers.google.gmail_client import GmailClient
@@ -61,11 +63,15 @@ class IncomingNotificationController:
         message_ids: list[str] = []
         page_token: str | None = None
         latest_history_id = str(notified_history_id)
+        last_entry_id: str | None = None
+        exhausted = False
         try:
             for _ in range(MAX_HISTORY_PAGES):
                 history = await self._gmail.list_history(account, str(start_history_id), page_token)
                 latest_history_id = str(history.get("historyId", latest_history_id))
                 for entry in history.get("history", []):
+                    if entry.get("id"):
+                        last_entry_id = str(entry["id"])
                     for added in entry.get("messagesAdded", []):
                         message = added.get("message", {})
                         labels = message.get("labelIds", [])
@@ -75,6 +81,7 @@ class IncomingNotificationController:
                             message_ids.append(message["id"])
                 page_token = history.get("nextPageToken")
                 if not page_token:
+                    exhausted = True
                     break
         except ProviderNotFoundError:
             # startHistoryId too old — re-prime from the current profile.
@@ -87,7 +94,15 @@ class IncomingNotificationController:
         for message_id in dict.fromkeys(message_ids):
             await self._emit_message_created(account, message_id, provider=AccountProvider.google)
 
-        context["history_id"] = latest_history_id
+        # If the page cap stopped us early, only advance the cursor to the last entry we
+        # actually processed — advancing to the mailbox-latest id would drop the tail.
+        if exhausted:
+            context["history_id"] = latest_history_id
+        elif last_entry_id is not None:
+            context["history_id"] = last_entry_id
+            logger.warning(
+                f"Gmail history page cap reached for {account.email}; cursor advanced to {last_entry_id} only"
+            )
         await self._account_repo.update(account, {"provider_context": context}, do_commit=False)
 
     # --- Microsoft ---
@@ -139,22 +154,27 @@ class IncomingNotificationController:
         if provider == AccountProvider.microsoft and not message.folders:
             return
 
+        email_row = Email(
+            account_id=account.id,
+            email_id=message.id,
+            thread_id=message.thread_id,
+            folder=message.folders[0] if message.folders else "",
+        )
         try:
-            await self._email_repo.add(
-                Email(
-                    account_id=account.id,
-                    email_id=message.id,
-                    thread_id=message.thread_id,
-                    folder=message.folders[0] if message.folders else "",
-                )
-            )
-        except Exception:
+            await self._email_repo.add(email_row)
+        except IntegrityError:
             # Unique (account_id, email_id) violation — another worker beat us to it.
             await self._email_repo.rollback()
             logger.info(f"Duplicate notification for message {message_id} ({account.email}); skipping")
             return
 
-        await self._webhook_sender.send_event(account, "message.created", message.model_dump(by_alias=True))
+        delivered = await self._webhook_sender.send_event(account, "message.created", message.model_dump(by_alias=True))
+        if not delivered:
+            # Remove the dedup row so a later notification or replay can re-emit;
+            # leaving it would permanently suppress this message downstream.
+            await self._email_repo.delete(email_row)
+            logger.warning(f"message.created not delivered for {message.id} ({account.email}); dedup row removed")
+            return
 
         bounce = detect_bounce(message)
         if bounce:

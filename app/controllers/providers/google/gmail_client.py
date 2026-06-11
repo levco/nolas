@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import logging
 import uuid
@@ -15,7 +14,7 @@ from app.controllers.providers.base import (
     ProviderSendResult,
 )
 from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError
-from app.controllers.providers.google.mapper import gmail_label_name, map_gmail_message
+from app.controllers.providers.google.mapper import decode_base64url, gmail_label_name, map_gmail_message
 from app.controllers.providers.google.query import build_gmail_query
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.mime import build_mime_message
@@ -190,7 +189,7 @@ class GmailClient(ProviderClient):
             )
         except ProviderNotFoundError:
             return None
-        data = base64.urlsafe_b64decode(response.get("data", "").encode())
+        data = decode_base64url(response.get("data", ""))
         return AttachmentContent(data=data, content_type=metadata.content_type, filename=metadata.filename)
 
     async def get_folder(self, account: Account, folder_id: str) -> FolderData | None:

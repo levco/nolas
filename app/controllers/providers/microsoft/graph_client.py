@@ -135,7 +135,7 @@ class GraphClient(ProviderClient):
                 json_body={},
                 headers=IMMUTABLE_ID_HEADER,
             )
-            patch_body = self._build_message_body(to, subject, body, cc, bcc, reply_to)
+            patch_body = self._build_message_body(to, subject, body, cc, bcc, reply_to, from_)
             draft = await self._http.request(
                 account,
                 "PATCH",
@@ -148,7 +148,7 @@ class GraphClient(ProviderClient):
                 account,
                 "POST",
                 f"{GRAPH_API_BASE}/me/messages",
-                json_body=self._build_message_body(to, subject, body, cc, bcc, reply_to),
+                json_body=self._build_message_body(to, subject, body, cc, bcc, reply_to, from_),
                 headers=IMMUTABLE_ID_HEADER,
             )
 
@@ -173,6 +173,7 @@ class GraphClient(ProviderClient):
         cc: list[EmailAddress] | None,
         bcc: list[EmailAddress] | None,
         reply_to: list[EmailAddress] | None,
+        from_: list[EmailAddress] | None = None,
     ) -> dict[str, Any]:
         def recipients(addresses: list[EmailAddress] | None) -> list[dict[str, Any]]:
             return [
@@ -191,6 +192,9 @@ class GraphClient(ProviderClient):
             message["bccRecipients"] = recipients(bcc)
         if reply_to:
             message["replyTo"] = recipients(reply_to)
+        if from_:
+            # Honored by Graph for shared-mailbox/delegate sends; ignored for self sends.
+            message["from"] = recipients(from_)[0]
         return message
 
     async def _add_attachment(self, account: Account, draft_id: str, attachment: AttachmentData) -> None:
@@ -232,6 +236,7 @@ class GraphClient(ProviderClient):
         while offset < total:
             chunk = attachment.data[offset : offset + UPLOAD_CHUNK_SIZE]
             end = offset + len(chunk) - 1
+            # Upload-session URLs are pre-authenticated; a bearer header breaks them.
             await self._http.request(
                 account,
                 "PUT",
@@ -242,6 +247,7 @@ class GraphClient(ProviderClient):
                     "Content-Range": f"bytes {offset}-{end}/{total}",
                 },
                 expect_json=False,
+                include_auth=False,
             )
             offset += len(chunk)
 

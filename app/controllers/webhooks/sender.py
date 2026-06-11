@@ -106,7 +106,8 @@ class WebhookSender:
                     )
                     if delivered:
                         return True
-                    if 400 <= response.status < 500:
+                    # 429 is retryable; other 4xx are permanent rejections.
+                    if 400 <= response.status < 500 and response.status != 429:
                         logger.warning(
                             f"Webhook {event_type} rejected with {response.status} for account {account.email}"
                         )
@@ -144,7 +145,9 @@ class WebhookSender:
         delivered: bool,
     ) -> None:
         try:
-            await self._webhook_log_repo.persist(
+            # Flush only: committing here would persist unrelated in-flight state
+            # (e.g. dedup rows) even when the surrounding operation later fails.
+            await self._webhook_log_repo.add(
                 WebhookLog(
                     uuid=webhook_uuid,
                     app_id=account.app_id,

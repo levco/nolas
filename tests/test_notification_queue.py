@@ -60,15 +60,27 @@ class TestNotificationQueue:
         assert queue.depth == 2
 
     @pytest.mark.asyncio
-    async def test_processing_error_does_not_kill_worker(self) -> None:
+    async def test_failed_job_is_retried_then_succeeds(self) -> None:
         queue, controller = _make_queue(workers=1)
         controller.process_google_notification.side_effect = [RuntimeError("boom"), None]
         queue.start()
         try:
             queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
-            queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "2"}))
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             assert controller.process_google_notification.await_count == 2
+        finally:
+            await queue.stop()
+
+    @pytest.mark.asyncio
+    async def test_persistently_failing_job_is_dropped_after_max_attempts(self) -> None:
+        queue, controller = _make_queue(workers=1)
+        controller.process_google_notification.side_effect = RuntimeError("boom")
+        queue.start()
+        try:
+            queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
+            await asyncio.wait_for(queue._queue.join(), timeout=2)
+            assert controller.process_google_notification.await_count == 3  # MAX_JOB_ATTEMPTS
+            assert queue.depth == 0
         finally:
             await queue.stop()
 

@@ -76,10 +76,10 @@ class NotificationQueueSettings(BaseSettings):
 
 class RetentionSettings(BaseSettings):
     # Days to keep webhook delivery logs.
-    webhook_logs_days: int = Field(alias="RETENTION_WEBHOOK_LOGS_DAYS", default=30)
+    webhook_logs_days: int = Field(alias="RETENTION_WEBHOOK_LOGS_DAYS", default=30, ge=1)
     # Days to keep email dedup/metadata rows. Must comfortably exceed any notification
     # replay window so old messages cannot re-emit message.created webhooks.
-    emails_days: int = Field(alias="RETENTION_EMAILS_DAYS", default=90)
+    emails_days: int = Field(alias="RETENTION_EMAILS_DAYS", default=90, ge=1)
 
 
 class SubscriptionRenewalSettings(BaseSettings):

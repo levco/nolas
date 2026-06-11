@@ -5,7 +5,7 @@ Providers router - provider detection for email addresses (Nylas POST /v3/provid
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
@@ -58,7 +58,9 @@ async def detect_provider(
     app: App = Depends(get_current_app),
 ) -> ProviderDetectResponse:
     normalized = email.strip().lower()
-    domain = normalized.split("@")[-1] if "@" in normalized else ""
+    if "@" not in normalized or not normalized.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+    domain = normalized.split("@")[-1]
 
     provider: str | None = None
     if domain in GOOGLE_DOMAINS:

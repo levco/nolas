@@ -46,12 +46,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_column("apps", "grant_webhook_url")
+    # Rows written while the columns were nullable would break the NOT NULL restore.
+    op.execute("UPDATE webhook_logs SET folder = '' WHERE folder IS NULL")
+    op.execute("UPDATE webhook_logs SET uid = 0 WHERE uid IS NULL")
     op.alter_column("webhook_logs", "uid", existing_type=sa.BigInteger(), nullable=False)
     op.alter_column("webhook_logs", "folder", existing_type=sa.String(length=255), nullable=False)
-    op.alter_column(
-        "accounts",
-        "credentials",
-        existing_type=sa.Text(),
-        type_=sa.String(length=255),
-        existing_nullable=False,
-    )
+    # credentials stays Text on downgrade: stored Microsoft refresh tokens exceed 255
+    # chars and a VARCHAR(255) cast would fail (and truncation would corrupt them).

@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.container import ApplicationContainer
+from app.environment import EnvironmentName
+from settings import settings
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.controllers.notifications.queue import GOOGLE, MICROSOFT, NotificationJob, NotificationQueue
 
@@ -37,6 +39,9 @@ async def google_notification(
     queue: NotificationQueue = Depends(Provide[ApplicationContainer.controllers.notification_queue]),
 ) -> Response:
     expected_token = controller.google_verification_token
+    if not expected_token and settings.environment == EnvironmentName.PRODUCTION:
+        logger.error("GOOGLE_PUBSUB_VERIFICATION_TOKEN not configured in production; rejecting push")
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "endpoint not configured"})
     if expected_token and token != expected_token:
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "invalid token"})
 

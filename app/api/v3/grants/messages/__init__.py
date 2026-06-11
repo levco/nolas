@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _wants_headers(fields: str | None) -> bool:
+    return "include_headers" in [token.strip() for token in (fields or "").split(",")]
+
+
 @router.get(
     "/{message_id}",
     response_model=MessageResponse,
@@ -66,7 +70,7 @@ async def get_message(
         return error_response
     assert account is not None  # account is guaranteed to be not None when error_response is None
 
-    include_headers = "include_headers" in (fields or "")
+    include_headers = _wants_headers(fields)
     try:
         message = await registry.get_client(account).get_message(account, message_id, include_headers=include_headers)
         if message is None:
@@ -137,7 +141,7 @@ async def list_messages(
         subject=subject,
         received_after=received_after,
         received_before=received_before,
-        include_headers="include_headers" in (fields or ""),
+        include_headers=_wants_headers(fields),
         search_query_native=search_query_native,
     )
 

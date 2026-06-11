@@ -14,10 +14,15 @@ GOOGLE = "google"
 MICROSOFT = "microsoft"
 
 
+# Re-enqueue a failed job at most this many times before dropping it.
+MAX_JOB_ATTEMPTS = 3
+
+
 @dataclass
 class NotificationJob:
     kind: str  # GOOGLE | MICROSOFT
     payload: dict[str, Any] = field(default_factory=dict)
+    attempts: int = 0
 
 
 class NotificationQueue:
@@ -88,7 +93,17 @@ class NotificationQueue:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception(f"[worker-{worker_id}] failed to process {job.kind} notification")
+                job.attempts += 1
+                if job.attempts < MAX_JOB_ATTEMPTS:
+                    logger.warning(
+                        f"[worker-{worker_id}] {job.kind} notification failed "
+                        f"(attempt {job.attempts}/{MAX_JOB_ATTEMPTS}); re-enqueueing"
+                    )
+                    self.try_enqueue(job)
+                else:
+                    logger.exception(
+                        f"[worker-{worker_id}] dropping {job.kind} notification after {job.attempts} attempts"
+                    )
             finally:
                 self._queue.task_done()
 

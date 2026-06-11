@@ -84,6 +84,12 @@ class CustomAuthController:
     async def update_grant_refresh_token(self, account: Account, refresh_token: str) -> Account:
         token_payload = await self._token_service.validate_refresh_token(account.provider, refresh_token)
         effective_refresh_token = token_payload.get("refresh_token") or refresh_token
+
+        # The token must belong to this grant's mailbox; otherwise a token for a
+        # different account could be bound to an existing grant.
+        token_email = await self._fetch_account_email(account.provider, token_payload["access_token"])
+        if token_email is None or token_email.lower() != account.email.lower():
+            raise ProviderAuthError(f"Refresh token belongs to a different mailbox than grant {account.uuid}.")
         context = {
             key: value
             for key, value in (account.provider_context or {}).items()

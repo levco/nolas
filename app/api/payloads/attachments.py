@@ -11,6 +11,7 @@ class AttachmentMetadata(BaseModel):
     grant_id: str
     is_inline: bool = False
     content_id: str | None = None
+    content_disposition: str | None = None
 
 
 class AttachmentMetadataResponse(BaseModel):

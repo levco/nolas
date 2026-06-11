@@ -34,9 +34,15 @@ def gmail_label_name(label_id: str, raw_name: str | None = None) -> str:
     return GMAIL_SYSTEM_LABEL_NAMES.get(label_id, raw_name or label_id)
 
 
+def decode_base64url(data: str) -> bytes:
+    """Gmail base64url payloads may arrive unpadded; normalize before decoding."""
+    padded = data + "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(padded.encode())
+
+
 def _decode_body(data: str) -> str:
     try:
-        return base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="ignore")
+        return decode_base64url(data).decode("utf-8", errors="ignore")
     except Exception:
         logger.exception("Failed to decode Gmail body part")
         return ""
