@@ -1,5 +1,11 @@
 BE=nolas
 
+run:
+	docker compose up
+
+build:
+	docker compose up --build
+
 upgrade:
 	docker exec -it $(BE) alembic upgrade head
 

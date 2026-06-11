@@ -1,7 +1,7 @@
 from typing import cast
 
 from fastapi_async_sqlalchemy import db
-from sqlalchemy import ScalarResult
+from sqlalchemy import ScalarResult, text
 from sqlalchemy.orm import selectinload
 
 from app.models.account import Account, AccountProvider, AccountStatus
@@ -61,6 +61,24 @@ class AccountRepo(BaseRepo[Account]):
         query = self.base_stmt.where(Account.status == AccountStatus.active).options(selectinload(Account.app))
         result = await db.session.execute(query)
         return cast(ScalarResult[Account], result.scalars())
+
+    # Advisory lock namespace for refresh-token redemption (avoids collisions with other locks).
+    _REFRESH_LOCK_NAMESPACE = 0x4E4F4C41  # "NOLA"
+
+    async def acquire_refresh_lock(self, account_id: int) -> None:
+        """Blocks until this process holds the cross-replica refresh lock for the account.
+
+        Transaction-scoped (pg_advisory_xact_lock): released automatically at commit/rollback.
+        """
+        await db.session.execute(
+            text("SELECT pg_advisory_xact_lock(:ns, :key)"),
+            {"ns": self._REFRESH_LOCK_NAMESPACE, "key": account_id},
+        )
+
+    async def refresh_from_db(self, account: Account) -> Account:
+        """Re-read the account row, discarding stale in-memory state."""
+        await db.session.refresh(account)
+        return account
 
     async def mark_as_active(self, account: Account) -> Account:
         """Mark an account as active."""

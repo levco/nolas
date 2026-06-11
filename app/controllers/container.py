@@ -11,6 +11,7 @@ from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
 from app.controllers.imap.message_controller import MessageController
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
+from app.controllers.notifications.queue import NotificationQueue
 from app.controllers.notifications.subscription_manager import SubscriptionManager
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.http import AuthorizedHttpClient
@@ -114,4 +115,11 @@ class ControllerContainer(containers.DeclarativeContainer):
         gmail_client=gmail_client,
         graph_client=graph_client,
         webhook_sender=webhook_sender,
+    )
+
+    notification_queue = providers.Singleton(
+        NotificationQueue,
+        incoming_controller=incoming_notification_controller,
+        workers=settings.notification_queue.workers,
+        maxsize=settings.notification_queue.maxsize,
     )

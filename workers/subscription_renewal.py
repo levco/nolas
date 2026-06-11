@@ -64,6 +64,21 @@ async def renew_once() -> None:
         await token_service.close()
         logger.info(f"Subscription renewal pass complete: {renewed}/{len(accounts)} renewed")
 
+        await run_retention_cleanup()
+
+
+async def run_retention_cleanup() -> None:
+    """Bound table growth: emails and webhook_logs grow with users x mail volume."""
+    webhook_log_repo = container.repos.webhook_log()
+    email_repo = container.repos.email()
+    try:
+        deleted_logs = await webhook_log_repo.delete_older_than(settings.retention.webhook_logs_days)
+        deleted_emails = await email_repo.delete_older_than(settings.retention.emails_days)
+        await webhook_log_repo.commit()
+        logger.info(f"Retention cleanup: removed {deleted_logs} webhook logs, {deleted_emails} email rows")
+    except Exception:
+        logger.exception("Retention cleanup failed")
+
 
 async def main() -> None:
     shutdown_event = asyncio.Event()

@@ -10,4 +10,4 @@ if settings.sentry.is_enabled:
 
 setup_logging()
 container = get_wire_container()
-app = create_app()
+app = create_app(container=container)

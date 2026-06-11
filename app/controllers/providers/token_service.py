@@ -56,7 +56,14 @@ class TokenService:
 
         lock = self._refresh_locks.setdefault(account.id, asyncio.Lock())
         async with lock:
-            # Re-check after acquiring the lock: another task may have refreshed.
+            # Microsoft rotates refresh tokens on redemption, so a concurrent refresh from
+            # another replica is destructive. Serialize cross-replica via a Postgres
+            # advisory lock and re-read the row in case the other replica already rotated.
+            if account.provider == AccountProvider.microsoft:
+                await self._account_repo.acquire_refresh_lock(account.id)
+                await self._account_repo.refresh_from_db(account)
+
+            # Re-check after acquiring the lock(s): another task may have refreshed.
             context = account.provider_context or {}
             encrypted_token = context.get("access_token")
             expires_at = context.get("access_token_expires_at", 0)

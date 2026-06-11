@@ -1,4 +1,7 @@
-from sqlalchemy import and_, or_
+from datetime import UTC, datetime, timedelta
+
+from fastapi_async_sqlalchemy import db
+from sqlalchemy import and_, delete, or_
 
 from app.models import Email
 from app.repos.base import BaseRepo
@@ -26,3 +29,9 @@ class EmailRepo(BaseRepo[Email]):
             )
         )
         return result.one_or_none()
+
+    async def delete_older_than(self, days: int) -> int:
+        """Delete email metadata rows older than the given number of days. Returns rows deleted."""
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        result = await db.session.execute(delete(Email).where(Email.created_at < cutoff))
+        return result.rowcount or 0

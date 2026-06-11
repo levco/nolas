@@ -69,6 +69,19 @@ class MicrosoftProviderSettings(BaseSettings):
     request_timeout: int = Field(alias="MICROSOFT_REQUEST_TIMEOUT", default=30)
 
 
+class NotificationQueueSettings(BaseSettings):
+    workers: int = Field(alias="NOTIFICATION_QUEUE_WORKERS", default=8)
+    maxsize: int = Field(alias="NOTIFICATION_QUEUE_MAXSIZE", default=1000)
+
+
+class RetentionSettings(BaseSettings):
+    # Days to keep webhook delivery logs.
+    webhook_logs_days: int = Field(alias="RETENTION_WEBHOOK_LOGS_DAYS", default=30)
+    # Days to keep email dedup/metadata rows. Must comfortably exceed any notification
+    # replay window so old messages cannot re-emit message.created webhooks.
+    emails_days: int = Field(alias="RETENTION_EMAILS_DAYS", default=90)
+
+
 class SubscriptionRenewalSettings(BaseSettings):
     # How often the renewal worker scans accounts, in seconds.
     poll_interval: int = Field(alias="SUBSCRIPTION_RENEWAL_POLL_INTERVAL", default=3600)
@@ -92,6 +105,8 @@ class Settings(BaseSettings):
     google: GoogleProviderSettings = Field(default_factory=GoogleProviderSettings)
     microsoft: MicrosoftProviderSettings = Field(default_factory=MicrosoftProviderSettings)
     subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
+    retention: RetentionSettings = Field(default_factory=RetentionSettings)
+    notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:

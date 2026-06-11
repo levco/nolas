@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.container import ApplicationContainer
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
+from app.controllers.notifications.queue import GOOGLE, MICROSOFT, NotificationJob, NotificationQueue
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +34,7 @@ async def google_notification(
     controller: IncomingNotificationController = Depends(
         Provide[ApplicationContainer.controllers.incoming_notification_controller]
     ),
+    queue: NotificationQueue = Depends(Provide[ApplicationContainer.controllers.notification_queue]),
 ) -> Response:
     expected_token = controller.google_verification_token
     if expected_token and token != expected_token:
@@ -50,7 +52,15 @@ async def google_notification(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     if email_address and history_id is not None:
-        await controller.process_google_notification(str(email_address).lower(), str(history_id))
+        # Ack immediately and process async. Safe: a lost job is recovered by the
+        # per-account history cursor on the next notification.
+        job = NotificationJob(
+            kind=GOOGLE,
+            payload={"email_address": str(email_address).lower(), "history_id": str(history_id)},
+        )
+        if not queue.try_enqueue(job):
+            # Backpressure: Pub/Sub retries on non-2xx.
+            return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -64,9 +74,7 @@ async def google_notification(
 async def microsoft_notification(
     request: Request,
     validation_token: str | None = Query(default=None, alias="validationToken"),
-    controller: IncomingNotificationController = Depends(
-        Provide[ApplicationContainer.controllers.incoming_notification_controller]
-    ),
+    queue: NotificationQueue = Depends(Provide[ApplicationContainer.controllers.notification_queue]),
 ) -> Response:
     # Subscription validation handshake: echo the token as text/plain within 10 seconds.
     if validation_token is not None:
@@ -80,6 +88,8 @@ async def microsoft_notification(
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
     for notification in notifications:
-        await controller.process_microsoft_notification(notification)
+        if not queue.try_enqueue(NotificationJob(kind=MICROSOFT, payload={"notification": notification})):
+            # Backpressure: Graph retries on non-2xx.
+            return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
