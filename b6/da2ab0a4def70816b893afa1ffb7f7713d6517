@@ -1,0 +1,51 @@
+settings/settings.py
+  s_a7e917b8017cac::t_8f87540897948c 79,82
+app/controllers/webhooks/sender.py
+  s_a7e917b8017cac::t_25c7a7109d8672 109-110,148-150
+app/controllers/providers/http.py
+  s_a7e917b8017cac::t_0ac57d9a32362c 53,55-61,64-66,71
+tests/test_notification_queue.py
+  s_a7e917b8017cac::t_77129cb40f6767 63,74-83
+app/controllers/providers/google/gmail_client.py
+  s_a7e917b8017cac::t_d810f281020768 17,192
+migrations/versions/20260609_100000_a1b2c3d4e5f6_google_microsoft_providers.py
+  s_a7e917b8017cac::t_8f87540897948c 49-51,54-55
+app/controllers/providers/microsoft/graph_client.py
+  s_a7e917b8017cac::t_0ac57d9a32362c 138,151,176,195-197,239,250
+app/controllers/notifications/queue.py
+  s_a7e917b8017cac::t_4c39f5f530e211 17-20,25,96-106
+app/api/payloads/attachments.py
+  s_a7e917b8017cac::t_4c39f5f530e211 14
+app/api/v3/providers.py
+  s_a7e917b8017cac::t_4c39f5f530e211 8,61-63
+app/controllers/providers/google/mapper.py
+  s_a7e917b8017cac::t_d810f281020768 37-42,45
+app/controllers/notifications/incoming_controller.py
+  s_a7e917b8017cac::t_d7d931638e886c 171
+  s_a7e917b8017cac::t_25c7a7109d8672 4-5,66-67,73-74,84,97-105,157-162,164-165,172-177
+app/api/v3/grants/messages/__init__.py
+  s_a7e917b8017cac::t_d810f281020768 41-44,73,144
+app/api/v3/notifications.py
+  s_a7e917b8017cac::t_d810f281020768 18-19,42-44
+app/controllers/grant/custom_auth_controller.py
+  s_a7e917b8017cac::t_8f87540897948c 87-91
+  s_a7e917b8017cac::t_d7d931638e886c 92
+app/api/v3/grants/folders/__init__.py
+  s_a7e917b8017cac::t_d810f281020768 60-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b6da2ab0a4def70816b893afa1ffb7f7713d6517",
+  "prompts": {},
+  "sessions": {
+    "s_a7e917b8017cac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7dffe0d3-1d52-434d-9071-c57d2277b47d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Alberto Sheinfeld <825651+asheinfeld@users.noreply.github.com>"
+    }
+  }
+}
