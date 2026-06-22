@@ -2,6 +2,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+import requests
+from cachecontrol import CacheControl
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
@@ -32,7 +34,7 @@ class GooglePubSubOidcVerifier:
         self._audience = audience.strip()
         self._service_account_email = service_account_email.strip().lower()
         self._token_verifier = token_verifier
-        self._request_adapter = request_adapter or GoogleRequest()
+        self._request_adapter = request_adapter or self._build_cached_request_adapter()
 
     def verify_authorization_header(self, authorization: str | None) -> OidcVerificationResult:
         if not self._audience or not self._service_account_email:
@@ -63,3 +65,9 @@ class GooglePubSubOidcVerifier:
             return OidcVerificationResult(is_valid=False, error="Service account email is not verified")
 
         return OidcVerificationResult(is_valid=True)
+
+    @staticmethod
+    def _build_cached_request_adapter() -> GoogleRequest:
+        """Cache cert fetches used by google-auth token verification."""
+        cached_session = CacheControl(requests.Session())
+        return GoogleRequest(session=cached_session)
