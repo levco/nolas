@@ -12,6 +12,7 @@ from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
 from app.api.middlewares.auto_commit import AutoCommitMiddleware
 from app.api.routes import api_router
+from app.container import ApplicationContainer
 from app.environment import EnvironmentName
 from app.exceptions import BaseError, ErrorType
 from settings import settings
@@ -49,7 +50,7 @@ def _setup_error_handlers(app: FastAPI) -> None:
         return JSONResponse(status_code=500, content={"error": ErrorType.UNHANDLED_EXCEPTION.value})
 
 
-def create_app() -> FastAPI:
+def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     """Create and configure FastAPI application."""
     app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0")
 

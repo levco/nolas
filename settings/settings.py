@@ -41,6 +41,65 @@ class WebhookSettings(BaseSettings):
     timeout: int = Field(alias="WEBHOOK_TIMEOUT", default=10)
 
 
+class ApiSettings(BaseSettings):
+    # Public HTTPS base URL of this service (no trailing slash). Required for Microsoft Graph
+    # change-notification subscriptions and referenced by Google Pub/Sub push configuration.
+    public_base_url: str = Field(alias="API_PUBLIC_BASE_URL", default="")
+
+
+class GoogleProviderSettings(BaseSettings):
+    client_id: str = Field(alias="GOOGLE_CLIENT_ID", default="")
+    client_secret: str = Field(alias="GOOGLE_CLIENT_SECRET", default="")
+    # Fully-qualified Pub/Sub topic for Gmail watch, e.g. projects/<project>/topics/<topic>.
+    pubsub_topic: str = Field(alias="GOOGLE_PUBSUB_TOPIC", default="")
+    # Expected service account email identity from Pub/Sub's signed OIDC push JWT.
+    pubsub_oidc_service_account_email: str = Field(alias="GOOGLE_PUBSUB_OIDC_SERVICE_ACCOUNT_EMAIL", default="")
+    # Expected JWT audience claim configured on the Pub/Sub subscription.
+    pubsub_oidc_audience: str = Field(alias="GOOGLE_PUBSUB_OIDC_AUDIENCE", default="")
+    request_timeout: int = Field(alias="GOOGLE_REQUEST_TIMEOUT", default=30)
+
+
+class MicrosoftProviderSettings(BaseSettings):
+    client_id: str = Field(alias="MICROSOFT_CLIENT_ID", default="")
+    client_secret: str = Field(alias="MICROSOFT_CLIENT_SECRET", default="")
+    authority: str = Field(alias="MICROSOFT_AUTHORITY", default="https://login.microsoftonline.com/common")
+    scopes: str = Field(
+        alias="MICROSOFT_SCOPES",
+        default="offline_access https://graph.microsoft.com/User.Read "
+        "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send",
+    )
+    request_timeout: int = Field(alias="MICROSOFT_REQUEST_TIMEOUT", default=30)
+
+
+class NotificationQueueSettings(BaseSettings):
+    workers: int = Field(alias="NOTIFICATION_QUEUE_WORKERS", default=8)
+    maxsize: int = Field(alias="NOTIFICATION_QUEUE_MAXSIZE", default=1000)
+
+
+class JobProcessorSettings(BaseSettings):
+    concurrency: int = Field(alias="JOB_PROCESSOR_CONCURRENCY", default=4, ge=1)
+    batch_size: int = Field(alias="JOB_PROCESSOR_BATCH_SIZE", default=5, ge=1)
+    idle_sleep_seconds: int = Field(alias="JOB_PROCESSOR_IDLE_SLEEP_SECONDS", default=5, ge=1)
+    lock_timeout_seconds: int = Field(alias="JOB_PROCESSOR_LOCK_TIMEOUT_SECONDS", default=60, ge=1)
+
+
+class RetentionSettings(BaseSettings):
+    # Days to keep webhook delivery logs.
+    webhook_logs_days: int = Field(alias="RETENTION_WEBHOOK_LOGS_DAYS", default=30, ge=1)
+    # Days to keep email dedup/metadata rows. Must comfortably exceed any notification
+    # replay window so old messages cannot re-emit message.created webhooks.
+    emails_days: int = Field(alias="RETENTION_EMAILS_DAYS", default=90, ge=1)
+
+
+class SubscriptionRenewalSettings(BaseSettings):
+    # How often the renewal worker scans accounts, in seconds.
+    poll_interval: int = Field(alias="SUBSCRIPTION_RENEWAL_POLL_INTERVAL", default=3600)
+    # Renew watches/subscriptions expiring within this many hours.
+    renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
+    # Shared API key required by the internal /v3/notifications/subscriptions/renew endpoint.
+    enqueue_api_key: str = Field(alias="SUBSCRIPTION_RENEWAL_ENQUEUE_API_KEY", default="")
+
+
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "allow"}
 
@@ -53,6 +112,13 @@ class Settings(BaseSettings):
     sentry: SentrySettings = Field(default_factory=SentrySettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
+    google: GoogleProviderSettings = Field(default_factory=GoogleProviderSettings)
+    microsoft: MicrosoftProviderSettings = Field(default_factory=MicrosoftProviderSettings)
+    subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
+    retention: RetentionSettings = Field(default_factory=RetentionSettings)
+    notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)
+    job_processor: JobProcessorSettings = Field(default_factory=JobProcessorSettings)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:

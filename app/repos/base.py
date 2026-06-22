@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Any, Generic, Mapping, TypeVar, cast
 
 from fastapi_async_sqlalchemy import db
-from sqlalchemy import ScalarResult, select
+from sqlalchemy import ScalarResult, func, select
 from sqlalchemy.sql.selectable import Select
 
 from app.models.base import Base
@@ -65,3 +66,10 @@ class BaseRepo(Generic[ModelType]):
     async def flush(self) -> None:
         """Flush the current session."""
         await self._db.session.flush()
+
+    async def db_now(self) -> datetime:
+        """Current database timestamp (single source of time truth)."""
+        db_now = await self._db.session.scalar(select(func.now()))
+        if db_now is None:
+            raise RuntimeError("Failed to fetch database current time")
+        return db_now

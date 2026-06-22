@@ -14,9 +14,14 @@ from fastapi.templating import Jinja2Templates
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
+from app.api.payloads.grants import ConnectCustomRequest, GrantData, GrantResponse
 from app.api.payloads.oauth2 import OAuth2TokenRequest, OAuth2TokenResponse
+from app.api.utils.errors import create_error_response, provider_error_response
 from app.container import ApplicationContainer
 from app.controllers.grant.authorization_controller import AuthorizationController
+from app.controllers.grant.custom_auth_controller import CustomAuthController
+from app.controllers.providers.exceptions import ProviderError
+from app.models.account import AccountProvider
 from app.models.app import App
 from app.repos.account import AccountRepo
 from app.repos.app import AppRepo
@@ -245,3 +250,70 @@ async def token_exchange(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to exchange authorization code for token"
         ) from e
+
+
+@router.post(
+    "/custom",
+    response_model=GrantResponse,
+    responses={
+        400: {"model": APIError, "description": "Invalid provider or refresh token"},
+        401: {"model": APIError, "description": "Refresh token rejected by provider"},
+        500: {"model": APIError, "description": "Internal server error"},
+    },
+    summary="Create grant from refresh token (custom auth)",
+    description="Creates or re-activates a grant from a provider refresh token, mirroring Nylas custom auth.",
+)
+@inject
+async def connect_custom(
+    custom_request: ConnectCustomRequest,
+    app: App = Depends(get_current_app),
+    custom_auth_controller: CustomAuthController = Depends(
+        Provide[ApplicationContainer.controllers.custom_auth_controller]
+    ),
+) -> GrantResponse | JSONResponse:
+    """
+    Exchange a provider refresh token for a grant (Nylas POST /v3/connect/custom).
+    """
+    try:
+        provider = AccountProvider(custom_request.provider)
+    except ValueError:
+        return create_error_response(
+            error_type="invalid_request_error",
+            message=f"Unsupported provider: {custom_request.provider}",
+            status_code=400,
+        )
+    if provider not in (AccountProvider.google, AccountProvider.microsoft):
+        return create_error_response(
+            error_type="invalid_request_error",
+            message=f"Custom auth is not supported for provider {provider.value}.",
+            status_code=400,
+        )
+    if not custom_request.settings.refresh_token:
+        return create_error_response(
+            error_type="invalid_request_error",
+            message="settings.refresh_token is required.",
+            status_code=400,
+        )
+
+    try:
+        account = await custom_auth_controller.create_grant_from_refresh_token(
+            app, provider, custom_request.settings.refresh_token
+        )
+        return GrantResponse(
+            request_id=str(uuid.uuid4()),
+            data=GrantData(
+                id=str(account.uuid),
+                provider=account.provider.value,
+                email=account.email,
+                grant_status=account.grant_status,
+            ),
+        )
+    except ProviderError as e:
+        return provider_error_response(e)
+    except Exception:
+        logger.exception("Error creating grant from refresh token")
+        return create_error_response(
+            error_type="internal_error",
+            message="An unexpected error occurred when creating the grant",
+            status_code=500,
+        )

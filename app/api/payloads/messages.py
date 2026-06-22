@@ -20,6 +20,8 @@ class MessageAttachment(BaseModel):
     size: int
     content_type: str
     is_inline: bool = False
+    content_id: str | None = None
+    content_disposition: str | None = None
 
 
 class AttachmentData(BaseModel):
@@ -48,6 +50,13 @@ class BaseMessage(BaseModel):
         populate_by_name = True
 
 
+class MessageHeader(BaseModel):
+    """Single message header, returned when fields=include_headers is requested."""
+
+    name: str
+    value: str
+
+
 class Message(BaseMessage):
     """Message model matching Nylas API structure."""
 
@@ -59,6 +68,8 @@ class Message(BaseMessage):
     object: str
     snippet: str
     thread_id: str
+    created_at: int | None = None
+    headers: list[MessageHeader] | None = None
 
     class Config:
         populate_by_name = True

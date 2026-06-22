@@ -19,12 +19,25 @@ services:
     external_links:
       - postgres:postgres
     networks:
+      - default
       - lev_infra
 
-  email-watcher:
+  imap-watcher:
     image: nolas
-    container_name: email-watcher
+    container_name: imap-watcher
     entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/email_watcher.py'
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - .:/workers
+    networks:
+      - lev_infra
+
+  nolas-worker:
+    image: nolas
+    container_name: nolas-worker
+    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/nolas_worker.py'
     env_file:
       - .env
     volumes:
