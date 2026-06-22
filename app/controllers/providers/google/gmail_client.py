@@ -4,7 +4,12 @@ import logging
 import uuid
 from typing import Any
 
-from app.api.payloads.messages import AttachmentData, EmailAddress, Message, MessageAttachment
+from app.api.payloads.messages import (
+    AttachmentData,
+    EmailAddress,
+    Message,
+    MessageAttachment,
+)
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
@@ -14,7 +19,11 @@ from app.controllers.providers.base import (
     ProviderSendResult,
 )
 from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError
-from app.controllers.providers.google.mapper import decode_base64url, gmail_label_name, map_gmail_message
+from app.controllers.providers.google.mapper import (
+    decode_base64url,
+    gmail_label_name,
+    map_gmail_message,
+)
 from app.controllers.providers.google.query import build_gmail_query
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.mime import build_mime_message

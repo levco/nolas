@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -22,12 +22,13 @@ class JobRepo(BaseRepo[Job]):
         max_attempts: int = 5,
         available_at: datetime | None = None,
     ) -> Job:
+        effective_available_at = available_at or await self.db_now()
         job = Job(
             type=type,
             status=JobStatus.pending,
             payload=payload,
             max_attempts=max_attempts,
-            available_at=available_at or datetime.now(UTC),
+            available_at=effective_available_at,
         )
         await self.add(job)
         return job
@@ -59,8 +60,9 @@ class JobRepo(BaseRepo[Job]):
         return jobs
 
     async def mark_completed(self, job: Job) -> None:
+        db_now = await self.db_now()
         job.status = JobStatus.completed
-        job.completed_at = datetime.now(UTC)
+        job.completed_at = db_now
         job.locked_at = None
         job.locked_by = None
         await self.flush()
@@ -78,12 +80,14 @@ class JobRepo(BaseRepo[Job]):
             await self.flush()
             return
 
+        db_now = await self.db_now()
         job.status = JobStatus.pending
-        job.available_at = datetime.now(UTC) + timedelta(seconds=max(1, retry_delay_seconds))
+        job.available_at = db_now + timedelta(seconds=max(1, retry_delay_seconds))
         await self.flush()
 
     async def requeue_stale_processing(self, lock_timeout_seconds: int) -> int:
-        timeout = datetime.now(UTC) - timedelta(seconds=lock_timeout_seconds)
+        db_now = await self.db_now()
+        timeout = db_now - timedelta(seconds=lock_timeout_seconds)
         stmt = (
             update(Job)
             .where(Job.status == JobStatus.processing, Job.locked_at.is_not(None), Job.locked_at < timeout)

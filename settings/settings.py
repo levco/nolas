@@ -78,9 +78,9 @@ class NotificationQueueSettings(BaseSettings):
 
 class JobProcessorSettings(BaseSettings):
     concurrency: int = Field(alias="JOB_PROCESSOR_CONCURRENCY", default=4, ge=1)
-    batch_size: int = Field(alias="JOB_PROCESSOR_BATCH_SIZE", default=5)
-    idle_sleep_seconds: int = Field(alias="JOB_PROCESSOR_IDLE_SLEEP_SECONDS", default=5)
-    lock_timeout_seconds: int = Field(alias="JOB_PROCESSOR_LOCK_TIMEOUT_SECONDS", default=60)
+    batch_size: int = Field(alias="JOB_PROCESSOR_BATCH_SIZE", default=5, ge=1)
+    idle_sleep_seconds: int = Field(alias="JOB_PROCESSOR_IDLE_SLEEP_SECONDS", default=5, ge=1)
+    lock_timeout_seconds: int = Field(alias="JOB_PROCESSOR_LOCK_TIMEOUT_SECONDS", default=60, ge=1)
 
 
 class RetentionSettings(BaseSettings):
@@ -96,6 +96,8 @@ class SubscriptionRenewalSettings(BaseSettings):
     poll_interval: int = Field(alias="SUBSCRIPTION_RENEWAL_POLL_INTERVAL", default=3600)
     # Renew watches/subscriptions expiring within this many hours.
     renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
+    # Shared API key required by the internal /v3/notifications/subscriptions/renew endpoint.
+    enqueue_api_key: str = Field(alias="SUBSCRIPTION_RENEWAL_ENQUEUE_API_KEY", default="1nrH6CTMN6cYesqd4Scq")
 
 
 class Settings(BaseSettings):

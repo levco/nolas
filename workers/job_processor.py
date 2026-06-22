@@ -36,7 +36,12 @@ container = get_wire_container()
 
 
 async def _run_worker_loop(worker_id: str, shutdown_event: asyncio.Event) -> None:
-    job_processor = container.controllers.job_processor()
+    try:
+        job_processor = container.controllers.job_processor()
+    except Exception:
+        logger.exception(f"{worker_id}: failed to initialize job processor loop")
+        shutdown_event.set()
+        return
 
     while not shutdown_event.is_set():
         try:
@@ -58,6 +63,29 @@ async def _run_worker_loop(worker_id: str, shutdown_event: asyncio.Event) -> Non
                 continue
 
 
+def _handle_worker_task_done(task: asyncio.Task[None], worker_id: str, shutdown_event: asyncio.Event) -> None:
+    """Fail fast if any worker loop exits unexpectedly."""
+    if shutdown_event.is_set():
+        return
+
+    if task.cancelled():
+        logger.error(f"{worker_id}: worker loop cancelled unexpectedly")
+        shutdown_event.set()
+        return
+
+    error = task.exception()
+    if error is not None:
+        logger.error(
+            f"{worker_id}: worker loop crashed",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        shutdown_event.set()
+        return
+
+    logger.error(f"{worker_id}: worker loop exited unexpectedly")
+    shutdown_event.set()
+
+
 async def main() -> None:
     shutdown_event = asyncio.Event()
     process_id = uuid4().hex[:8]
@@ -74,14 +102,26 @@ async def main() -> None:
 
     async with fastapi_sqlalchemy_context():
         logger.info(f"Starting {concurrency} async job loop(s)")
-        worker_tasks = [
-            asyncio.create_task(
-                _run_worker_loop(worker_id=f"job-processor-{process_id}-{idx}", shutdown_event=shutdown_event),
+        worker_tasks: list[asyncio.Task[None]] = []
+        for idx in range(concurrency):
+            worker_id = f"job-processor-{process_id}-{idx}"
+            task = asyncio.create_task(
+                _run_worker_loop(worker_id=worker_id, shutdown_event=shutdown_event),
                 name=f"job-processor-{idx}",
             )
-            for idx in range(concurrency)
-        ]
+            task.add_done_callback(
+                lambda completed_task, wid=worker_id: _handle_worker_task_done(
+                    completed_task,
+                    wid,
+                    shutdown_event,
+                )
+            )
+            worker_tasks.append(task)
+
         await shutdown_event.wait()
+        for task in worker_tasks:
+            if not task.done():
+                task.cancel()
         await asyncio.gather(*worker_tasks, return_exceptions=True)
 
     await token_service.close()

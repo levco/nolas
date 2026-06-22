@@ -106,8 +106,16 @@ async def microsoft_notification(
 )
 @inject
 async def enqueue_subscription_renewals(
+    api_key: str | None = Header(default=None, alias="X-API-Key"),
     job_processor: JobProcessorController = Depends(Provide[ApplicationContainer.controllers.job_processor]),
 ) -> Response:
+    expected_api_key = settings.subscription_renewal.enqueue_api_key
+    if not expected_api_key:
+        logger.error("SUBSCRIPTION_RENEWAL_ENQUEUE_API_KEY is not configured; rejecting enqueue endpoint")
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": "endpoint not configured"})
+    if api_key is None or api_key != expected_api_key:
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "invalid api key"})
+
     try:
         enqueued = await job_processor.enqueue_due_subscription_renewals(
             settings.subscription_renewal.renew_within_hours * 3600
