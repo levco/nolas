@@ -22,9 +22,9 @@ services:
       - default
       - lev_infra
 
-  email-watcher:
+  imap-watcher:
     image: nolas
-    container_name: email-watcher
+    container_name: imap-watcher
     entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/email_watcher.py'
     env_file:
       - .env
@@ -34,10 +34,10 @@ services:
     networks:
       - lev_infra
 
-  subscription-renewal:
+  job-processor:
     image: nolas
-    container_name: subscription-renewal
-    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/subscription_renewal.py'
+    container_name: job-processor
+    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/job_processor.py'
     env_file:
       - .env
     volumes:

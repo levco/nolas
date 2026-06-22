@@ -10,6 +10,7 @@ from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
 from app.controllers.imap.message_controller import MessageController
+from app.controllers.jobs.processor import JobProcessorController
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.controllers.notifications.queue import NotificationQueue
 from app.controllers.notifications.subscription_manager import SubscriptionManager
@@ -112,9 +113,9 @@ class ControllerContainer(containers.DeclarativeContainer):
         IncomingNotificationController,
         account_repo=repos.account,
         email_repo=repos.email,
+        job_repo=repos.job,
         gmail_client=gmail_client,
         graph_client=graph_client,
-        webhook_sender=webhook_sender,
     )
 
     notification_queue = providers.Singleton(
@@ -122,4 +123,13 @@ class ControllerContainer(containers.DeclarativeContainer):
         incoming_controller=incoming_notification_controller,
         workers=settings.notification_queue.workers,
         maxsize=settings.notification_queue.maxsize,
+    )
+
+    job_processor = providers.Singleton(
+        JobProcessorController,
+        job_repo=repos.job,
+        incoming_notification_controller=incoming_notification_controller,
+        subscription_manager=subscription_manager,
+        account_repo=repos.account,
+        webhook_sender=webhook_sender,
     )

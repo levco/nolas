@@ -198,3 +198,14 @@ class UenoAnauthorizedError(BaseError):
         **kwargs: Any,
     ) -> None:
         super().__init__(message, error_type, status_code, **kwargs)
+
+
+class WebhookDeliveryError(BaseError):
+    def __init__(
+        self,
+        message: str,
+        error_type: ErrorType = ErrorType.THIRD_PARTY_REQUEST,
+        status_code: HTTPStatus = HTTPStatus.BAD_GATEWAY,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(message, error_type, status_code, **kwargs)

@@ -1,8 +1,6 @@
 import logging
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
-
 from app.controllers.notifications.bounce import detect_bounce
 from app.controllers.providers.exceptions import (
     ProviderAuthError,
@@ -11,11 +9,11 @@ from app.controllers.providers.exceptions import (
 )
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.microsoft.graph_client import GraphClient
-from app.controllers.webhooks.sender import WebhookSender
-from app.models import Email
 from app.models.account import Account, AccountProvider, AccountStatus
+from app.models.job import JobType
 from app.repos.account import AccountRepo
 from app.repos.email import EmailRepo
+from app.repos.job import JobRepo
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +28,15 @@ class IncomingNotificationController:
         self,
         account_repo: AccountRepo,
         email_repo: EmailRepo,
+        job_repo: JobRepo,
         gmail_client: GmailClient,
         graph_client: GraphClient,
-        webhook_sender: WebhookSender,
     ) -> None:
         self._account_repo = account_repo
         self._email_repo = email_repo
+        self._job_repo = job_repo
         self._gmail = gmail_client
         self._graph = graph_client
-        self._webhook_sender = webhook_sender
 
     # --- Google ---
 
@@ -52,12 +50,12 @@ class IncomingNotificationController:
             raise
         logger.info(f"Google notification for {email_address}: {len(accounts)} matching account(s)")
         for account in accounts:
-            logger.info(f"Processing account: {account.email}")
-            if account.status != AccountStatus.active:
-                logger.info(f"Account {account.email} is not active; skipping")
-                continue
             try:
-                logger.info(f"Processing account: {account.email}")
+                await self._account_repo.acquire_notification_lock(account.id)
+                await self._account_repo.refresh_from_db(account)
+                if account.status != AccountStatus.active:
+                    logger.info(f"Account {account.email} is not active; skipping")
+                    continue
                 await self._process_google_account(account, history_id)
                 logger.info(f"Processed account: {account.email}")
             except ProviderAuthError:
@@ -133,6 +131,8 @@ class IncomingNotificationController:
         if account is None:
             logger.warning(f"No account found for Graph subscription {subscription_id}")
             return
+        await self._account_repo.acquire_notification_lock(account.id)
+        await self._account_repo.refresh_from_db(account)
         if account.status != AccountStatus.active:
             return
         expected_state = (account.provider_context or {}).get("client_state")
@@ -150,11 +150,6 @@ class IncomingNotificationController:
     # --- Shared ---
 
     async def _emit_message_created(self, account: Account, message_id: str, provider: AccountProvider) -> None:
-        cached = await self._email_repo.get_by_account_and_email_id(account.id, message_id)
-        if cached:
-            # Already known — typically a message sent through our API.
-            return
-
         client = self._gmail if provider == AccountProvider.google else self._graph
         try:
             message = await client.get_message(account, message_id, include_headers=True)
@@ -168,28 +163,34 @@ class IncomingNotificationController:
         if provider == AccountProvider.microsoft and not message.folders:
             return
 
-        email_row = Email(
-            account_id=account.id,
-            email_id=message.id,
-            thread_id=message.thread_id,
-            folder=message.folders[0] if message.folders else "",
+        await self._job_repo.enqueue(
+            JobType.webhook_delivery,
+            {
+                "account_id": account.id,
+                "event_type": "message.created",
+                "source": "nolas",
+                "object_data": message.model_dump(by_alias=True),
+                "email_id": message.id,
+                "thread_id": message.thread_id,
+            },
+            max_attempts=10,
         )
-        try:
-            await self._email_repo.add(email_row)
-        except IntegrityError:
-            # Unique (account_id, email_id) violation — another worker beat us to it.
-            await self._email_repo.rollback()
-            logger.info(f"Duplicate notification for message {message_id} ({account.email}); skipping")
-            return
-
-        delivered = await self._webhook_sender.send_event(account, "message.created", message.model_dump(by_alias=True))
-        if not delivered:
-            # Remove the dedup row so a later notification or replay can re-emit;
-            # leaving it would permanently suppress this message downstream.
-            await self._email_repo.delete(email_row)
-            logger.warning(f"message.created not delivered for {message.id} ({account.email}); dedup row removed")
-            return
 
         bounce = detect_bounce(message)
         if bounce:
-            await self._webhook_sender.send_event(account, "message.bounce_detected", bounce)
+            try:
+                await self._job_repo.enqueue(
+                    JobType.webhook_delivery,
+                    {
+                        "account_id": account.id,
+                        "event_type": "message.bounce_detected",
+                        "source": "nolas",
+                        "object_data": bounce,
+                        "email_id": message.id,
+                        "thread_id": message.thread_id,
+                    },
+                    max_attempts=10,
+                )
+            except Exception:
+                # Bounce events are best-effort and should not block message.created processing.
+                logger.warning(f"Failed to enqueue bounce webhook for {message.id} ({account.email})", exc_info=True)

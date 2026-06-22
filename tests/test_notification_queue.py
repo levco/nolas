@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.controllers.notifications.queue import GOOGLE, MICROSOFT, NotificationJob, NotificationQueue
+from app.controllers.notifications.queue import (
+    GOOGLE,
+    MICROSOFT,
+    NotificationJob,
+    NotificationQueue,
+)
 
 
 @asynccontextmanager
@@ -31,7 +36,7 @@ class TestNotificationQueue:
         queue.start()
         try:
             assert queue.try_enqueue(
-                NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "42"})
+                NotificationJob(type=GOOGLE, payload={"email_address": "a@b.co", "history_id": "42"})
             )
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             controller.process_google_notification.assert_awaited_once_with("a@b.co", "42")
@@ -44,7 +49,7 @@ class TestNotificationQueue:
         queue.start()
         try:
             notification = {"subscriptionId": "sub-1", "resourceData": {"id": "msg-1"}}
-            assert queue.try_enqueue(NotificationJob(kind=MICROSOFT, payload={"notification": notification}))
+            assert queue.try_enqueue(NotificationJob(type=MICROSOFT, payload={"notification": notification}))
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             controller.process_microsoft_notification.assert_awaited_once_with(notification)
         finally:
@@ -54,9 +59,9 @@ class TestNotificationQueue:
     async def test_full_queue_rejects_with_backpressure(self) -> None:
         queue, _ = _make_queue(workers=1, maxsize=2)
         # Not started: jobs accumulate.
-        assert queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={}))
-        assert queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={}))
-        assert not queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={}))
+        assert queue.try_enqueue(NotificationJob(type=GOOGLE, payload={}))
+        assert queue.try_enqueue(NotificationJob(type=GOOGLE, payload={}))
+        assert not queue.try_enqueue(NotificationJob(type=GOOGLE, payload={}))
         assert queue.depth == 2
 
     @pytest.mark.asyncio
@@ -65,7 +70,7 @@ class TestNotificationQueue:
         controller.process_google_notification.side_effect = [RuntimeError("boom"), None]
         queue.start()
         try:
-            queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
+            queue.try_enqueue(NotificationJob(type=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             assert controller.process_google_notification.await_count == 2
         finally:
@@ -77,7 +82,7 @@ class TestNotificationQueue:
         controller.process_google_notification.side_effect = RuntimeError("boom")
         queue.start()
         try:
-            queue.try_enqueue(NotificationJob(kind=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
+            queue.try_enqueue(NotificationJob(type=GOOGLE, payload={"email_address": "a@b.co", "history_id": "1"}))
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             assert controller.process_google_notification.await_count == 3  # MAX_JOB_ATTEMPTS
             assert queue.depth == 0
@@ -85,11 +90,11 @@ class TestNotificationQueue:
             await queue.stop()
 
     @pytest.mark.asyncio
-    async def test_unknown_kind_is_swallowed(self) -> None:
+    async def test_unknown_type_is_swallowed(self) -> None:
         queue, controller = _make_queue(workers=1)
         queue.start()
         try:
-            queue.try_enqueue(NotificationJob(kind="carrier-pigeon", payload={}))
+            queue.try_enqueue(NotificationJob(type="carrier-pigeon", payload={}))
             await asyncio.wait_for(queue._queue.join(), timeout=2)
             controller.process_google_notification.assert_not_awaited()
             controller.process_microsoft_notification.assert_not_awaited()

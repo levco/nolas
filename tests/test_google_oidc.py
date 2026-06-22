@@ -1,6 +1,6 @@
 from typing import Any, Mapping
 
-from app.controllers.notifications.google_oidc import CONFIGURATION_ERROR, GooglePubSubOidcVerifier
+from app.services.google_oidc import GooglePubSubOidcVerifier
 
 
 def _verifier_with_claims(claims: Mapping[str, Any]) -> GooglePubSubOidcVerifier:
@@ -21,7 +21,7 @@ class TestGooglePubSubOidcVerifier:
         verifier = GooglePubSubOidcVerifier(audience="", service_account_email="")
         result = verifier.verify_authorization_header("Bearer token-123")
         assert not result.is_valid
-        assert result.error == CONFIGURATION_ERROR
+        assert result.error == GooglePubSubOidcVerifier.CONFIGURATION_ERROR
 
     def test_rejects_missing_authorization_header(self) -> None:
         verifier = _verifier_with_claims({})

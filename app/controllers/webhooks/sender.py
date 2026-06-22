@@ -48,6 +48,9 @@ class WebhookSender:
         event_type: str,
         object_data: dict[str, Any],
         source: str = "nolas",
+        email_id: str | None = None,
+        thread_id: str | None = None,
+        max_retries: int | None = None,
     ) -> bool:
         """Send a webhook event for an account. Returns True when delivered (2xx)."""
         await self.init_session()
@@ -76,7 +79,7 @@ class WebhookSender:
             },
         }
 
-        max_retries = settings.webhook.max_retries
+        max_retries = settings.webhook.max_retries if max_retries is None else max_retries
         base_delay = 1.0
 
         for attempt in range(1, max_retries + 1):
@@ -103,6 +106,8 @@ class WebhookSender:
                         response_body=None if delivered else await response.text(),
                         attempts=attempt,
                         delivered=delivered,
+                        email_id=email_id,
+                        thread_id=thread_id,
                     )
                     if delivered:
                         return True
@@ -113,9 +118,29 @@ class WebhookSender:
                         )
                         return False
             except asyncio.TimeoutError:
-                await self._log_delivery(account, webhook_uuid, webhook_url, None, "Timeout", attempt, delivered=False)
+                await self._log_delivery(
+                    account,
+                    webhook_uuid,
+                    webhook_url,
+                    None,
+                    "Timeout",
+                    attempt,
+                    delivered=False,
+                    email_id=email_id,
+                    thread_id=thread_id,
+                )
             except Exception as e:
-                await self._log_delivery(account, webhook_uuid, webhook_url, None, str(e), attempt, delivered=False)
+                await self._log_delivery(
+                    account,
+                    webhook_uuid,
+                    webhook_url,
+                    None,
+                    str(e),
+                    attempt,
+                    delivered=False,
+                    email_id=email_id,
+                    thread_id=thread_id,
+                )
 
             if attempt < max_retries:
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
@@ -143,6 +168,8 @@ class WebhookSender:
         response_body: str | None,
         attempts: int,
         delivered: bool,
+        email_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         try:
             # Flush only: committing here would persist unrelated in-flight state
@@ -154,6 +181,8 @@ class WebhookSender:
                     account_id=account.id,
                     folder=None,
                     uid=None,
+                    email_id=email_id,
+                    thread_id=thread_id,
                     webhook_url=webhook_url,
                     status_code=status_code,
                     response_body=response_body,

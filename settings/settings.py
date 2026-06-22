@@ -76,6 +76,13 @@ class NotificationQueueSettings(BaseSettings):
     maxsize: int = Field(alias="NOTIFICATION_QUEUE_MAXSIZE", default=1000)
 
 
+class JobProcessorSettings(BaseSettings):
+    concurrency: int = Field(alias="JOB_PROCESSOR_CONCURRENCY", default=4, ge=1)
+    batch_size: int = Field(alias="JOB_PROCESSOR_BATCH_SIZE", default=5)
+    idle_sleep_seconds: int = Field(alias="JOB_PROCESSOR_IDLE_SLEEP_SECONDS", default=5)
+    lock_timeout_seconds: int = Field(alias="JOB_PROCESSOR_LOCK_TIMEOUT_SECONDS", default=60)
+
+
 class RetentionSettings(BaseSettings):
     # Days to keep webhook delivery logs.
     webhook_logs_days: int = Field(alias="RETENTION_WEBHOOK_LOGS_DAYS", default=30, ge=1)
@@ -109,6 +116,7 @@ class Settings(BaseSettings):
     subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
     retention: RetentionSettings = Field(default_factory=RetentionSettings)
     notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)
+    job_processor: JobProcessorSettings = Field(default_factory=JobProcessorSettings)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:

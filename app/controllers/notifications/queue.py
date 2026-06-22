@@ -22,7 +22,7 @@ MAX_JOB_ATTEMPTS = 3
 
 @dataclass
 class NotificationJob:
-    kind: str  # GOOGLE | MICROSOFT
+    type: str  # GOOGLE | MICROSOFT
     payload: dict[str, Any] = field(default_factory=dict)
     attempts: int = 0
 
@@ -79,7 +79,7 @@ class NotificationQueue:
             self._queue.put_nowait(job)
             return True
         except asyncio.QueueFull:
-            logger.warning(f"Notification queue full; rejecting {job.kind} notification")
+            logger.warning(f"Notification queue full; rejecting {job.type} notification")
             return False
 
     @property
@@ -98,27 +98,27 @@ class NotificationQueue:
                 job.attempts += 1
                 if job.attempts < MAX_JOB_ATTEMPTS:
                     logger.warning(
-                        f"[worker-{worker_id}] {job.kind} notification failed "
+                        f"[worker-{worker_id}] {job.type} notification failed "
                         f"(attempt {job.attempts}/{MAX_JOB_ATTEMPTS}); re-enqueueing"
                     )
                     if not self.try_enqueue(job):
                         logger.error(
-                            f"[worker-{worker_id}] queue full; dropping {job.kind} notification "
+                            f"[worker-{worker_id}] queue full; dropping {job.type} notification "
                             f"after {job.attempts} attempt(s)"
                         )
                 else:
                     logger.exception(
-                        f"[worker-{worker_id}] dropping {job.kind} notification after {job.attempts} attempts"
+                        f"[worker-{worker_id}] dropping {job.type} notification after {job.attempts} attempts"
                     )
             finally:
                 self._queue.task_done()
 
     async def _process(self, job: NotificationJob) -> None:
-        if job.kind == GOOGLE:
+        if job.type == GOOGLE:
             await self._incoming_controller.process_google_notification(
                 job.payload["email_address"], job.payload["history_id"]
             )
-        elif job.kind == MICROSOFT:
+        elif job.type == MICROSOFT:
             await self._incoming_controller.process_microsoft_notification(job.payload["notification"])
         else:
-            logger.error(f"Unknown notification job kind: {job.kind}")
+            logger.error(f"Unknown notification job type: {job.type}")
