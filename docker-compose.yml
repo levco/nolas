@@ -34,10 +34,10 @@ services:
     networks:
       - lev_infra
 
-  job-processor:
+  nolas-worker:
     image: nolas
-    container_name: job-processor
-    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/job_processor.py'
+    container_name: nolas-worker
+    entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/nolas_worker.py'
     env_file:
       - .env
     volumes:
