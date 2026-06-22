@@ -27,6 +27,7 @@ dependencies = [
     "gunicorn>=23.0.0",
     "sentry-sdk[fastapi]>=2.33.0",
     "dnspython>=2.8.0",
+    "google-auth>=2.55.0",
 ]
 
 [project.optional-dependencies]

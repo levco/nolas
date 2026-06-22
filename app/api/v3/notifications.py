@@ -2,8 +2,8 @@
 Notifications router - inbound push notifications from Google Pub/Sub and Microsoft Graph.
 
 These endpoints are called by the providers, not by API clients, so they do not use
-bearer-token app authentication. Google pushes are verified via a shared token query
-parameter; Microsoft notifications are verified via the per-subscription clientState.
+bearer-token app authentication. Google pushes are verified with Pub/Sub OIDC JWTs;
+Microsoft notifications are verified via the per-subscription clientState.
 """
 
 import base64
@@ -11,14 +11,17 @@ import json
 import logging
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.container import ApplicationContainer
-from app.environment import EnvironmentName
-from settings import settings
-from app.controllers.notifications.incoming_controller import IncomingNotificationController
-from app.controllers.notifications.queue import GOOGLE, MICROSOFT, NotificationJob, NotificationQueue
+from app.controllers.notifications.queue import (
+    GOOGLE,
+    MICROSOFT,
+    NotificationJob,
+    NotificationQueue,
+)
+from app.services.google_oidc import GooglePubSubOidcVerifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,17 +35,18 @@ router = APIRouter()
 @inject
 async def google_notification(
     request: Request,
-    token: str = Query(default=""),
-    controller: IncomingNotificationController = Depends(
-        Provide[ApplicationContainer.controllers.incoming_notification_controller]
-    ),
+    authorization: str | None = Header(default=None, alias="Authorization"),
     queue: NotificationQueue = Depends(Provide[ApplicationContainer.controllers.notification_queue]),
+    google_oidc_verifier: GooglePubSubOidcVerifier = Depends(
+        Provide[ApplicationContainer.services.google_oidc_verifier]
+    ),
 ) -> Response:
-    expected_token = controller.google_verification_token
-    if not expected_token and settings.environment == EnvironmentName.PRODUCTION:
-        logger.error("GOOGLE_PUBSUB_VERIFICATION_TOKEN not configured in production; rejecting push")
+    auth_result = google_oidc_verifier.verify_authorization_header(authorization)
+    if not auth_result.is_valid and auth_result.error == GooglePubSubOidcVerifier.CONFIGURATION_ERROR:
+        logger.error("Google Pub/Sub OIDC auth is not configured; rejecting push")
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "endpoint not configured"})
-    if expected_token and token != expected_token:
+    if not auth_result.is_valid:
+        logger.warning(f"Rejected Google Pub/Sub push: {auth_result.error}")
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "invalid token"})
 
     try:
@@ -60,14 +64,13 @@ async def google_notification(
         # Ack immediately and process async. Safe: a lost job is recovered by the
         # per-account history cursor on the next notification.
         job = NotificationJob(
-            kind=GOOGLE,
-            payload={"email_address": str(email_address).lower(), "history_id": str(history_id)},
+            kind=GOOGLE, payload={"email_address": str(email_address).lower(), "history_id": str(history_id)}
         )
         if not queue.try_enqueue(job):
             # Backpressure: Pub/Sub retries on non-2xx.
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status_code=status.HTTP_200_OK)
 
 
 @router.post(

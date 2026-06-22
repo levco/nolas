@@ -6,7 +6,9 @@ from typing import Any, Callable
 
 from fastapi_async_sqlalchemy import db
 
-from app.controllers.notifications.incoming_controller import IncomingNotificationController
+from app.controllers.notifications.incoming_controller import (
+    IncomingNotificationController,
+)
 
 logger = logging.getLogger(__name__)
 

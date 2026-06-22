@@ -19,6 +19,7 @@ services:
     external_links:
       - postgres:postgres
     networks:
+      - default
       - lev_infra
 
   email-watcher:

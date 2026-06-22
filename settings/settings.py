@@ -52,8 +52,10 @@ class GoogleProviderSettings(BaseSettings):
     client_secret: str = Field(alias="GOOGLE_CLIENT_SECRET", default="")
     # Fully-qualified Pub/Sub topic for Gmail watch, e.g. projects/<project>/topics/<topic>.
     pubsub_topic: str = Field(alias="GOOGLE_PUBSUB_TOPIC", default="")
-    # Shared secret expected as ?token= on the Pub/Sub push endpoint.
-    pubsub_verification_token: str = Field(alias="GOOGLE_PUBSUB_VERIFICATION_TOKEN", default="")
+    # Expected service account email identity from Pub/Sub's signed OIDC push JWT.
+    pubsub_oidc_service_account_email: str = Field(alias="GOOGLE_PUBSUB_OIDC_SERVICE_ACCOUNT_EMAIL", default="")
+    # Expected JWT audience claim configured on the Pub/Sub subscription.
+    pubsub_oidc_audience: str = Field(alias="GOOGLE_PUBSUB_OIDC_AUDIENCE", default="")
     request_timeout: int = Field(alias="GOOGLE_REQUEST_TIMEOUT", default=30)
 
 

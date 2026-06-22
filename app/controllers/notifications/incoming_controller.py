@@ -4,7 +4,11 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from app.controllers.notifications.bounce import detect_bounce
-from app.controllers.providers.exceptions import ProviderAuthError, ProviderError, ProviderNotFoundError
+from app.controllers.providers.exceptions import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderNotFoundError,
+)
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.microsoft.graph_client import GraphClient
 from app.controllers.webhooks.sender import WebhookSender
@@ -12,7 +16,6 @@ from app.models import Email
 from app.models.account import Account, AccountProvider, AccountStatus
 from app.repos.account import AccountRepo
 from app.repos.email import EmailRepo
-from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +43,23 @@ class IncomingNotificationController:
     # --- Google ---
 
     async def process_google_notification(self, email_address: str, history_id: str) -> None:
-        accounts = await self._account_repo.get_all_by_email_and_provider(email_address, AccountProvider.google)
+        try:
+            accounts = await self._account_repo.get_all_by_email_and_provider(email_address, AccountProvider.google)
+        except Exception:
+            logger.exception(
+                f"Failed loading Google accounts for notification (email={email_address}, history_id={history_id})"
+            )
+            raise
+        logger.info(f"Google notification for {email_address}: {len(accounts)} matching account(s)")
         for account in accounts:
+            logger.info(f"Processing account: {account.email}")
             if account.status != AccountStatus.active:
+                logger.info(f"Account {account.email} is not active; skipping")
                 continue
             try:
+                logger.info(f"Processing account: {account.email}")
                 await self._process_google_account(account, history_id)
+                logger.info(f"Processed account: {account.email}")
             except ProviderAuthError:
                 logger.warning(f"Auth failure processing Gmail notification for {account.email}")
             except Exception:
@@ -179,7 +193,3 @@ class IncomingNotificationController:
         bounce = detect_bounce(message)
         if bounce:
             await self._webhook_sender.send_event(account, "message.bounce_detected", bounce)
-
-    @property
-    def google_verification_token(self) -> str:
-        return settings.google.pubsub_verification_token
