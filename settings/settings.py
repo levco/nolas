@@ -92,8 +92,6 @@ class RetentionSettings(BaseSettings):
 
 
 class SubscriptionRenewalSettings(BaseSettings):
-    # How often the renewal worker scans accounts, in seconds.
-    poll_interval: int = Field(alias="SUBSCRIPTION_RENEWAL_POLL_INTERVAL", default=3600)
     # Renew watches/subscriptions expiring within this many hours.
     renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
     # Shared API key required by the internal /v3/notifications/subscriptions/renew endpoint.
