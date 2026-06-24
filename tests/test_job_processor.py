@@ -114,7 +114,7 @@ class TestJobProcessorController:
             JobType.subscription_renewal_check,
             {},
             max_attempts=5,
-            available_at=now + timedelta(hours=1),
+            available_at=now + timedelta(hours=settings.subscription_renewal.check_interval_hours),
         )
         job_repo.mark_completed.assert_awaited_once_with(job)
 

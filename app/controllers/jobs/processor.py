@@ -80,10 +80,10 @@ class JobProcessorController:
         return await self.enqueue_subscription_renewals(account_ids)
 
     async def enqueue_subscription_renewal_check(self, *, available_at: datetime | None = None) -> Job:
-        """Enqueue the hourly scheduler job that fans out due subscription renewals.
+        """Enqueue the scheduler job that fans out due subscription renewals.
 
         Bootstrap by manually adding a single `subscription_renewal_check` job row.
-        Each successful run enqueues the next run one hour later.
+        Each successful run enqueues the next run after the configured interval.
         """
         return await self._job_repo.enqueue(
             JobType.subscription_renewal_check, {}, max_attempts=5, available_at=available_at
@@ -138,7 +138,9 @@ class JobProcessorController:
             enqueued = await self.enqueue_due_subscription_renewals(
                 settings.subscription_renewal.renew_within_hours * 3600
             )
-            next_run_at = await self._job_repo.db_now() + timedelta(hours=1)
+            next_run_at = await self._job_repo.db_now() + timedelta(
+                hours=settings.subscription_renewal.check_interval_hours
+            )
             await self.enqueue_subscription_renewal_check(available_at=next_run_at)
             logger.info(
                 f"subscription_renewal_check enqueued {enqueued} renewal job(s); next check at {next_run_at.isoformat()}"

@@ -94,6 +94,8 @@ class RetentionSettings(BaseSettings):
 class SubscriptionRenewalSettings(BaseSettings):
     # Renew watches/subscriptions expiring within this many hours.
     renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
+    # Interval (hours) between subscription renewal check scheduler runs.
+    check_interval_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_CHECK_INTERVAL_HOURS", default=6, ge=1)
 
 
 class Settings(BaseSettings):
