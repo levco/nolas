@@ -113,7 +113,7 @@ class TestJobProcessorController:
         job_repo.enqueue.assert_any_await(
             JobType.subscription_renewal_check,
             {},
-            max_attempts=1000,
+            max_attempts=5,
             available_at=now + timedelta(hours=1),
         )
         job_repo.mark_completed.assert_awaited_once_with(job)
