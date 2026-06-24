@@ -14,6 +14,7 @@ class JobType(Enum):
     google_notification = "google_notification"
     microsoft_notification = "microsoft_notification"
     subscription_renewal = "subscription_renewal"
+    subscription_renewal_check = "subscription_renewal_check"
     webhook_delivery = "webhook_delivery"
 
 

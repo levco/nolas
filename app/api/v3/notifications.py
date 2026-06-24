@@ -1,8 +1,8 @@
 """
 Notifications router - inbound push notifications from Google Pub/Sub and Microsoft Graph.
 
-These endpoints are called by providers (and an internal scheduler endpoint), not by
-API clients, so they do not use bearer-token app authentication. Google pushes are
+These endpoints are called by providers, not by API clients, so they do not use
+bearer-token app authentication. Google pushes are
 verified with Pub/Sub OIDC JWTs; Microsoft notifications are verified via the
 per-subscription clientState.
 """
@@ -18,7 +18,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.container import ApplicationContainer
 from app.controllers.jobs.processor import JobProcessorController
 from app.services.google_oidc import GooglePubSubOidcVerifier
-from settings import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -98,30 +97,3 @@ async def microsoft_notification(
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
-
-@router.post(
-    "/subscriptions/renew",
-    summary="Enqueue subscription renewals",
-    description="Internal endpoint to enqueue renewal jobs for due Google/Microsoft accounts.",
-)
-@inject
-async def enqueue_subscription_renewals(
-    api_key: str | None = Header(default=None, alias="X-API-Key"),
-    job_processor: JobProcessorController = Depends(Provide[ApplicationContainer.controllers.job_processor]),
-) -> Response:
-    expected_api_key = settings.subscription_renewal.enqueue_api_key
-    if not expected_api_key:
-        logger.error("SUBSCRIPTION_RENEWAL_ENQUEUE_API_KEY is not configured; rejecting enqueue endpoint")
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": "endpoint not configured"})
-    if api_key is None or api_key != expected_api_key:
-        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"error": "invalid api key"})
-
-    try:
-        enqueued = await job_processor.enqueue_due_subscription_renewals(
-            settings.subscription_renewal.renew_within_hours * 3600
-        )
-    except Exception:
-        logger.exception("Failed to enqueue subscription renewal jobs")
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": "enqueue failed"})
-
-    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"enqueued": enqueued})
