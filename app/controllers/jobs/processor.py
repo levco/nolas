@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.controllers.jobs.payloads import (
@@ -17,6 +18,7 @@ from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobType
 from app.repos.account import AccountRepo
 from app.repos.job import JobRepo
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,16 @@ class JobProcessorController:
             return 0
         return await self.enqueue_subscription_renewals(account_ids)
 
+    async def enqueue_subscription_renewal_check(self, *, available_at: datetime | None = None) -> Job:
+        """Enqueue the hourly scheduler job that fans out due subscription renewals.
+
+        Bootstrap by manually adding a single `subscription_renewal_check` job row.
+        Each successful run enqueues the next run one hour later.
+        """
+        return await self._job_repo.enqueue(
+            JobType.subscription_renewal_check, {}, max_attempts=5, available_at=available_at
+        )
+
     async def process_available_jobs(self, worker_id: str, batch_size: int, lock_timeout_seconds: int) -> int:
         recovered = await self._job_repo.requeue_stale_processing(lock_timeout_seconds)
         if recovered:
@@ -120,6 +132,17 @@ class JobProcessorController:
         if job.type == JobType.microsoft_notification:
             payload = MicrosoftNotificationJobPayload.model_validate(job.payload)
             await self._incoming_notification_controller.process_microsoft_notification(payload.notification)
+            return
+
+        if job.type == JobType.subscription_renewal_check:
+            enqueued = await self.enqueue_due_subscription_renewals(
+                settings.subscription_renewal.renew_within_hours * 3600
+            )
+            next_run_at = await self._job_repo.db_now() + timedelta(hours=1)
+            await self.enqueue_subscription_renewal_check(available_at=next_run_at)
+            logger.info(
+                f"subscription_renewal_check enqueued {enqueued} renewal job(s); next check at {next_run_at.isoformat()}"
+            )
             return
 
         if job.type == JobType.subscription_renewal:

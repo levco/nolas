@@ -94,8 +94,6 @@ class RetentionSettings(BaseSettings):
 class SubscriptionRenewalSettings(BaseSettings):
     # Renew watches/subscriptions expiring within this many hours.
     renew_within_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_WITHIN_HOURS", default=24)
-    # Shared API key required by the internal /v3/notifications/subscriptions/renew endpoint.
-    enqueue_api_key: str = Field(alias="SUBSCRIPTION_RENEWAL_ENQUEUE_API_KEY", default="")
 
 
 class Settings(BaseSettings):

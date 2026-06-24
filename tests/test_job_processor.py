@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -7,6 +8,7 @@ import pytest
 from app.controllers.jobs.processor import JobProcessorController
 from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobType
+from settings import settings
 
 
 def _make_controller() -> tuple[JobProcessorController, AsyncMock, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
@@ -80,6 +82,41 @@ class TestJobProcessorController:
         assert job_repo.enqueue.await_count == 2
         job_repo.enqueue.assert_any_await(JobType.subscription_renewal, {"account_id": 101})
         job_repo.enqueue.assert_any_await(JobType.subscription_renewal, {"account_id": 202})
+
+    @pytest.mark.asyncio
+    async def test_processes_subscription_renewal_check_job(self) -> None:
+        controller, job_repo, _, _, account_repo, _ = _make_controller()
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        job = cast(
+            Job,
+            SimpleNamespace(
+                id=13,
+                type=JobType.subscription_renewal_check,
+                payload={},
+                attempts=0,
+                max_attempts=1000,
+            ),
+        )
+        account_repo.get_ids_needing_subscription_renewal.return_value = [101, 202]
+        job_repo.db_now.return_value = now
+        job_repo.requeue_stale_processing.return_value = 0
+        job_repo.claim_batch.return_value = [job]
+
+        processed = await controller.process_available_jobs(worker_id="w-1", batch_size=10, lock_timeout_seconds=300)
+
+        assert processed == 1
+        account_repo.get_ids_needing_subscription_renewal.assert_awaited_once_with(
+            settings.subscription_renewal.renew_within_hours * 3600
+        )
+        job_repo.enqueue.assert_any_await(JobType.subscription_renewal, {"account_id": 101})
+        job_repo.enqueue.assert_any_await(JobType.subscription_renewal, {"account_id": 202})
+        job_repo.enqueue.assert_any_await(
+            JobType.subscription_renewal_check,
+            {},
+            max_attempts=5,
+            available_at=now + timedelta(hours=1),
+        )
+        job_repo.mark_completed.assert_awaited_once_with(job)
 
     @pytest.mark.asyncio
     async def test_processes_google_job(self) -> None:

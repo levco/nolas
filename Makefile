@@ -21,3 +21,18 @@ downgrade:
 
 imap-debug-shell:
 	docker exec -it $(BE) env PYTHONSTARTUP=app/debug/debug_startup.py python -m asyncio
+
+test:
+	@if [[ "$(test_name)" == "" ]]; then \
+		if [ -t 1 ]; then \
+			docker exec $(BE) pytest -x -W ignore tests/$$(echo "$(file)" | sed 's|^tests/||'); \
+		else \
+			docker exec $(BE) pytest -x -W ignore tests/$$(echo "$(file)" | sed 's|^tests/||'); \
+		fi \
+	else \
+		if [ -t 1 ]; then \
+			docker exec $(BE) pytest -W ignore tests/$$(echo "$(file)" | sed 's|^tests/||') -k $(test_name); \
+		else \
+			docker exec $(BE) pytest -W ignore tests/$$(echo "$(file)" | sed 's|^tests/||') -k $(test_name); \
+		fi \
+	fi
