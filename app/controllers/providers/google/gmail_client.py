@@ -137,7 +137,9 @@ class GmailClient(ProviderClient):
                 headers={"Content-Type": f"multipart/mixed; boundary={boundary}"},
                 expect_json=False,
             )
-            messages, rate_limited_ids = self._parse_batch_response(response_body, account, include_headers)
+            messages, rate_limited_ids = self._parse_batch_response(
+                response_body, account, include_headers, valid_message_ids=set(message_ids)
+            )
             if rate_limited_ids:
                 logger.warning(
                     "Gmail batch partially rate limited (%s/%s); retrying those messages individually",
@@ -154,7 +156,7 @@ class GmailClient(ProviderClient):
             return await self._fetch_messages_individually(account, message_ids, include_headers)
 
     def _parse_batch_response(
-        self, response_body: bytes, account: Account, include_headers: bool
+        self, response_body: bytes, account: Account, include_headers: bool, valid_message_ids: set[str]
     ) -> tuple[dict[str, Message], list[str]]:
         boundary = self._extract_batch_boundary(response_body)
         parts = response_body.split(boundary)
@@ -174,9 +176,14 @@ class GmailClient(ProviderClient):
             if status_code == 404:
                 continue
             if status_code == 429:
-                content_id = self._extract_content_id(part_headers)
-                if content_id is None:
+                raw_content_id = self._extract_content_id(part_headers)
+                if raw_content_id is None:
                     raise ProviderRateLimitError("Gmail batch subrequest rate limited and content-id is missing")
+                content_id = self._normalize_batch_content_id(raw_content_id, valid_message_ids)
+                if content_id is None:
+                    raise ProviderRateLimitError(
+                        f"Gmail batch subrequest rate limited with unknown content-id: {raw_content_id}"
+                    )
                 rate_limited_ids.append(content_id)
                 continue
             if status_code < 200 or status_code >= 300:
@@ -209,6 +216,21 @@ class GmailClient(ProviderClient):
         if not match:
             return None
         return match.group(1).decode()
+
+    def _normalize_batch_content_id(self, content_id: str, valid_message_ids: set[str]) -> str | None:
+        candidates = [content_id]
+        if content_id.lower().startswith("response-"):
+            candidates.append(content_id[len("response-") :])
+
+        for candidate in candidates:
+            if candidate in valid_message_ids:
+                return candidate
+            if "+" in candidate:
+                candidate_prefix = candidate.split("+", maxsplit=1)[0]
+                if candidate_prefix in valid_message_ids:
+                    return candidate_prefix
+
+        return None
 
     def _parse_nested_http_response(self, nested_http: bytes) -> tuple[int, bytes]:
         status_line, rest = self._split_first_line(nested_http)

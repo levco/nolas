@@ -181,3 +181,26 @@ class TestGmailClientBatchHydration:
         assert [message.id for message in messages] == ["m1", "m2"]
         assert http.request.await_count == 3
         assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
+
+    def test_normalizes_response_content_id_before_rate_limit_fallback(self) -> None:
+        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
+            if method == "POST" and url == GMAIL_BATCH_BASE:
+                return _batch_response(
+                    [
+                        _batch_part("response-m1+abc", 429, '{"error":{"message":"rate limited"}}'),
+                    ]
+                )
+            assert method == "GET"
+            assert kwargs["params"] == {"format": "full"}
+            message_id = url.rsplit("/", 1)[-1]
+            assert message_id == "m1"
+            return _raw_message(message_id)
+
+        http = SimpleNamespace(request=AsyncMock(side_effect=request))
+        client = GmailClient(http)
+
+        messages = asyncio.run(client._hydrate_messages(_account(), ["m1"], include_headers=False))
+
+        assert [message.id for message in messages] == ["m1"]
+        assert http.request.await_count == 2
+        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
