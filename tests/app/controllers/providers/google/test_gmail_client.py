@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from app.controllers.providers.exceptions import ProviderError
+from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
 
 if "aiohttp" not in sys.modules:
     aiohttp_stub = types.ModuleType("aiohttp")
@@ -62,7 +62,14 @@ def _raw_message(message_id: str) -> dict[str, Any]:
 
 
 def _batch_part(content_id: str, status_code: int, body: str) -> str:
-    status_text = "OK" if 200 <= status_code < 300 else "Not Found"
+    if status_code == 404:
+        status_text = "Not Found"
+    elif status_code == 429:
+        status_text = "Too Many Requests"
+    elif 200 <= status_code < 300:
+        status_text = "OK"
+    else:
+        status_text = "Error"
     return (
         "Content-Type: application/http\r\n"
         f"Content-ID: <{content_id}>\r\n"
@@ -120,6 +127,47 @@ class TestGmailClientBatchHydration:
         async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
             if method == "POST" and url == GMAIL_BATCH_BASE:
                 raise ProviderError("batch unavailable")
+            assert method == "GET"
+            assert kwargs["params"] == {"format": "full"}
+            message_id = url.rsplit("/", 1)[-1]
+            return _raw_message(message_id)
+
+        http = SimpleNamespace(request=AsyncMock(side_effect=request))
+        client = GmailClient(http)
+
+        messages = asyncio.run(client._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
+
+        assert [message.id for message in messages] == ["m1", "m2"]
+        assert http.request.await_count == 3
+        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
+
+    def test_fetches_rate_limited_subresponses_individually(self) -> None:
+        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
+            if method == "POST" and url == GMAIL_BATCH_BASE:
+                return _batch_response(
+                    [
+                        _batch_part("m1", 429, '{"error":{"message":"rate limited"}}'),
+                        _batch_part("m2", 200, json.dumps(_raw_message("m2"))),
+                    ]
+                )
+            assert method == "GET"
+            assert kwargs["params"] == {"format": "full"}
+            message_id = url.rsplit("/", 1)[-1]
+            return _raw_message(message_id)
+
+        http = SimpleNamespace(request=AsyncMock(side_effect=request))
+        client = GmailClient(http)
+
+        messages = asyncio.run(client._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
+
+        assert [message.id for message in messages] == ["m1", "m2"]
+        assert http.request.await_count == 2
+        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
+
+    def test_falls_back_when_batch_envelope_is_rate_limited(self) -> None:
+        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
+            if method == "POST" and url == GMAIL_BATCH_BASE:
+                raise ProviderRateLimitError("envelope rate limited")
             assert method == "GET"
             assert kwargs["params"] == {"format": "full"}
             message_id = url.rsplit("/", 1)[-1]
