@@ -23,7 +23,11 @@ from app.api.payloads.messages import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from app.api.utils.errors import create_error_response, provider_error_response, validate_grant_access
+from app.api.utils.errors import (
+    create_error_response,
+    provider_error_response,
+    validate_grant_access,
+)
 from app.container import ApplicationContainer
 from app.controllers.providers.base import ListMessagesParams
 from app.controllers.providers.exceptions import ProviderError
@@ -127,6 +131,7 @@ async def list_messages(
     """
     Lists messages for a grant.
     """
+    logger.info(f"Listing messages for grant {grant_id}")
     account, error_response = await validate_grant_access(app.id, grant_id)
     if error_response:
         return error_response
@@ -185,6 +190,7 @@ async def send_message(
     """
     Sends the specified message.
     """
+    logger.info(f"Sending message for grant {grant_id}")
     account, error_response = await validate_grant_access(app.id, grant_id)
     if error_response:
         return error_response
