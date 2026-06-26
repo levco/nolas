@@ -42,7 +42,10 @@ LOGGING_CONFIG = {
     "loggers": {
         "": {"handlers": ["jsonStreamHandler"], "level": settings.logging.level, "propagate": False},
         # werkzeug logging request twice.  This ensures it only logged once (propogate set to false)
-        "werkzeug": {"handlers": ["jsonStreamHandler"], "propagate": False},
+        "werkzeug": {
+            "handlers": ["jsonStreamHandler"],
+            "propagate": False,
+        },
     },
 }
 LOCAL_LOGGING_CONFIG = {
@@ -70,27 +73,28 @@ LOCAL_LOGGING_CONFIG = {
         "botocore": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "urllib3": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
         "pymongo": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
-        "aioimaplib": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
-        "asyncio": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
-        "python_multipart": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
+        "ddtrace": {"handlers": ["default"], "level": logging.WARNING, "propagate": False},
     },
 }
 
 
 # Used because we add custom local formatting.
 class CustomJsonFormatter(JsonFormatter):
+    _app_env: str | None
+    _pretty_format: bool
+
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self._app_env = settings.environment
         self._pretty_format = settings.logging.use_pretty_json
         # For local development we want to make logs more clear
-        if self._app_env == EnvironmentName.DEVELOPMENT and self._pretty_format:
+        if self._app_env == EnvironmentName.DEVELOPMENT.value and self._pretty_format:
             self.json_indent = 2
 
     def format(self, record: logging.LogRecord) -> str:
         result = super(CustomJsonFormatter, self).format(record)
         # For local development we want to make logs more clear.
-        if self._app_env == EnvironmentName.DEVELOPMENT and self._pretty_format:
+        if self._app_env == EnvironmentName.DEVELOPMENT.value and self._pretty_format:
             result = result.replace("\\n", "\n\t\t")
         return result
 
