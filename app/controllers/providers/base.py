@@ -1,7 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from app.api.payloads.messages import AttachmentData, EmailAddress, Message, MessageAttachment
+from app.api.payloads.messages import (
+    AttachmentData,
+    EmailAddress,
+    Message,
+    MessageAttachment,
+)
 from app.models.account import Account
 
 
@@ -12,6 +17,7 @@ class ListMessagesParams:
     limit: int = 50
     page_token: str | None = None
     thread_id: str | None = None
+    in_: str | None = None
     from_: str | None = None
     any_email: list[str] = field(default_factory=list)
     subject: str | None = None

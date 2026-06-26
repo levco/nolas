@@ -14,6 +14,9 @@ def build_gmail_query(params: ListMessagesParams) -> str:
     if params.from_:
         clauses.append(f"from:{params.from_}")
 
+    if params.in_:
+        clauses.append(f"in:{params.in_}")
+
     if params.any_email:
         ors = " ".join(f"from:{email} to:{email} cc:{email} bcc:{email}" for email in params.any_email)
         clauses.append("{" + ors + "}")

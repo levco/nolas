@@ -10,6 +10,10 @@ class TestBuildGmailQuery:
         query = build_gmail_query(ListMessagesParams(from_="jane@example.com"))
         assert "from:jane@example.com" in query
 
+    def test_in_folder(self) -> None:
+        query = build_gmail_query(ListMessagesParams(in_="SENT"))
+        assert "in:SENT" in query
+
     def test_any_email_builds_or_group(self) -> None:
         query = build_gmail_query(ListMessagesParams(any_email=["a@x.com", "b@y.com"]))
         assert query.count("{") == 1
