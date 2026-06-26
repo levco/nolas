@@ -1,8 +1,9 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.api.payloads.messages import (
     AttachmentData,
@@ -25,7 +26,6 @@ from app.controllers.providers.google.mapper import (
     map_gmail_message,
 )
 from app.controllers.providers.google.query import build_gmail_query
-from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.mime import build_mime_message
 from app.models.account import Account
 
@@ -36,12 +36,17 @@ GMAIL_UPLOAD_BASE = "https://gmail.googleapis.com/upload/gmail/v1/users/me"
 
 # Concurrent message hydrations per list call.
 FETCH_CONCURRENCY = 10
+BATCH_SIZE = 50
+GMAIL_BATCH_BASE = "https://gmail.googleapis.com/batch/gmail/v1"
+
+if TYPE_CHECKING:
+    from app.controllers.providers.http import AuthorizedHttpClient
 
 
 class GmailClient(ProviderClient):
     """Gmail API implementation of the provider interface."""
 
-    def __init__(self, http_client: AuthorizedHttpClient) -> None:
+    def __init__(self, http_client: "AuthorizedHttpClient") -> None:
         self._http = http_client
 
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
@@ -86,17 +91,122 @@ class GmailClient(ProviderClient):
         return ListMessagesResult(messages=messages[: params.limit])
 
     async def _hydrate_messages(self, account: Account, ids: list[str], include_headers: bool) -> list[Message]:
+        if not ids:
+            return []
+
         semaphore = asyncio.Semaphore(FETCH_CONCURRENCY)
+        message_by_id: dict[str, Message] = {}
 
-        async def fetch(message_id: str) -> Message | None:
+        async def fetch_batch(batch_ids: list[str]) -> None:
             async with semaphore:
-                try:
-                    return await self.get_message(account, message_id, include_headers=include_headers)
-                except ProviderNotFoundError:
-                    return None
+                message_by_id.update(await self._fetch_message_batch(account, batch_ids, include_headers))
 
-        results = await asyncio.gather(*[fetch(message_id) for message_id in ids])
-        return [message for message in results if message is not None]
+        batches = [ids[i : i + BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
+        await asyncio.gather(*[fetch_batch(batch_ids) for batch_ids in batches])
+        return [message_by_id[message_id] for message_id in ids if message_id in message_by_id]
+
+    async def _fetch_message_batch(
+        self, account: Account, message_ids: list[str], include_headers: bool
+    ) -> dict[str, Message]:
+        boundary = f"batch_nolas_{uuid.uuid4().hex}"
+        request_lines: list[str] = []
+
+        for message_id in message_ids:
+            request_lines.extend(
+                [
+                    f"--{boundary}",
+                    "Content-Type: application/http",
+                    "Content-Transfer-Encoding: binary",
+                    f"Content-ID: <{message_id}>",
+                    "",
+                    f"GET /gmail/v1/users/me/messages/{message_id}?format=full HTTP/1.1",
+                    "",
+                ]
+            )
+        request_lines.extend([f"--{boundary}--", ""])
+
+        try:
+            response_body = await self._http.request(
+                account,
+                "POST",
+                GMAIL_BATCH_BASE,
+                data="\r\n".join(request_lines).encode(),
+                headers={"Content-Type": f"multipart/mixed; boundary={boundary}"},
+                expect_json=False,
+            )
+            return self._parse_batch_response(response_body, account, include_headers)
+        except ProviderError:
+            logger.exception("Gmail batch hydration failed; falling back to per-message fetch")
+            return await self._fetch_messages_individually(account, message_ids, include_headers)
+
+    def _parse_batch_response(self, response_body: bytes, account: Account, include_headers: bool) -> dict[str, Message]:
+        boundary = self._extract_batch_boundary(response_body)
+        parts = response_body.split(boundary)
+        messages: dict[str, Message] = {}
+
+        for raw_part in parts:
+            part = raw_part.strip()
+            if not part or part == b"--":
+                continue
+            if part.endswith(b"--"):
+                part = part[:-2].rstrip()
+
+            _, nested_http = self._split_headers_body(part)
+            status_code, nested_body = self._parse_nested_http_response(nested_http)
+
+            if status_code == 404:
+                continue
+            if status_code < 200 or status_code >= 300:
+                raise ProviderError(
+                    f"Gmail batch subrequest failed ({status_code}): {nested_body[:500].decode(errors='ignore')}"
+                )
+
+            raw_message = json.loads(nested_body.decode())
+            mapped = map_gmail_message(raw_message, account.uuid, include_headers=include_headers)
+            messages[mapped.id] = mapped
+
+        return messages
+
+    def _extract_batch_boundary(self, response_body: bytes) -> bytes:
+        match = re.search(rb"--([^\r\n]+)", response_body)
+        if not match:
+            raise ProviderError("Invalid Gmail batch response: missing multipart boundary")
+        return b"--" + match.group(1)
+
+    def _split_headers_body(self, content: bytes) -> tuple[bytes, bytes]:
+        separator = b"\r\n\r\n" if b"\r\n\r\n" in content else b"\n\n"
+        sections = content.split(separator, maxsplit=1)
+        if len(sections) != 2:
+            raise ProviderError("Invalid Gmail batch response: malformed MIME part")
+        return sections[0], sections[1]
+
+    def _parse_nested_http_response(self, nested_http: bytes) -> tuple[int, bytes]:
+        status_line, rest = self._split_first_line(nested_http)
+        tokens = status_line.split()
+        if len(tokens) < 2:
+            raise ProviderError(f"Invalid Gmail batch response: bad status line {status_line.decode(errors='ignore')}")
+        status_code = int(tokens[1])
+        _, body = self._split_headers_body(rest)
+        return status_code, body.strip()
+
+    def _split_first_line(self, content: bytes) -> tuple[bytes, bytes]:
+        separator = b"\r\n" if b"\r\n" in content else b"\n"
+        sections = content.split(separator, maxsplit=1)
+        if len(sections) != 2:
+            raise ProviderError("Invalid Gmail batch response: missing HTTP status line")
+        return sections[0], sections[1]
+
+    async def _fetch_messages_individually(
+        self, account: Account, message_ids: list[str], include_headers: bool
+    ) -> dict[str, Message]:
+        async def fetch(message_id: str) -> Message | None:
+            try:
+                return await self.get_message(account, message_id, include_headers=include_headers)
+            except ProviderNotFoundError:
+                return None
+
+        hydrated = await asyncio.gather(*[fetch(message_id) for message_id in message_ids])
+        return {message.id: message for message in hydrated if message is not None}
 
     async def send_message(
         self,
