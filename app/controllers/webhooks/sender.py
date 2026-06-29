@@ -30,6 +30,7 @@ class WebhookSender:
         self._webhook_log_repo = webhook_log_repo
         self._http_session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
+        self._logger = logging.getLogger(__name__)
 
     async def init_session(self) -> None:
         async with self._session_lock:
@@ -86,6 +87,9 @@ class WebhookSender:
             payload["webhook_delivery_attempt"] = attempt
             payload_json = json.dumps(payload)
             headers = {"Content-Type": "application/json"}
+            self._logger.info(
+                f"Sending webhook {event_type} to {webhook_url} for account {account.email}, webhook secret {app.webhook_secret}"
+            )
             signature = self._generate_signature(payload_json, app.webhook_secret or "")
             if signature:
                 headers["x-nylas-signature"] = signature
