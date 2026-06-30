@@ -110,7 +110,7 @@ def extract_gmail_attachments(payload: dict[str, Any]) -> list[MessageAttachment
             stable_id = filename if count == 0 else f"{filename}_{count}"
             filename_counts[filename] = count + 1
         else:
-            stable_id = gmail_token
+            continue
 
         attachments.append(
             MessageAttachment(
