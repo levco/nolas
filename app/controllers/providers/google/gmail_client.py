@@ -31,10 +31,15 @@ from app.controllers.providers.google.mapper import (
     gmail_label_name,
     map_gmail_message,
 )
-from app.controllers.providers.google.query import build_gmail_query
-from app.controllers.providers.google.query import build_gmail_thread_query
-from app.controllers.providers.threads import build_threads_from_messages, filter_threads
+from app.controllers.providers.google.query import (
+    build_gmail_query,
+    build_gmail_thread_query,
+)
 from app.controllers.providers.mime import build_mime_message
+from app.controllers.providers.threads import (
+    build_threads_from_messages,
+    filter_threads,
+)
 from app.models.account import Account
 
 logger = logging.getLogger(__name__)
@@ -193,17 +198,23 @@ class GmailClient(ProviderClient):
     async def download_attachment(
         self, account: Account, message_id: str, attachment_id: str
     ) -> AttachmentContent | None:
-        metadata = await self.get_attachment_metadata(account, message_id, attachment_id)
-        if metadata is None:
+        # Fetch the message fresh to get a current Gmail token. We cannot reuse
+        # a previously stored attachmentId because Gmail regenerates it on every
+        # message fetch, so any token obtained before this call is already stale.
+        message = await self.get_message(account, message_id)
+        if message is None:
+            return None
+        attachment = next((a for a in message.attachments if a.id == attachment_id), None)
+        if attachment is None or attachment.provider_id is None:
             return None
         try:
             response = await self._http.request(
-                account, "GET", f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}"
+                account, "GET", f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment.provider_id}"
             )
         except ProviderNotFoundError:
             return None
         data = decode_base64url(response.get("data", ""))
-        return AttachmentContent(data=data, content_type=metadata.content_type, filename=metadata.filename)
+        return AttachmentContent(data=data, content_type=attachment.content_type, filename=attachment.filename)
 
     async def get_folder(self, account: Account, folder_id: str) -> FolderData | None:
         try:

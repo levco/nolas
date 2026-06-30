@@ -3,7 +3,12 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from app.api.payloads.messages import EmailAddress, Message, MessageAttachment, MessageHeader
+from app.api.payloads.messages import (
+    EmailAddress,
+    Message,
+    MessageAttachment,
+    MessageHeader,
+)
 from app.utils.message_utils import MessageUtils
 
 logger = logging.getLogger(__name__)
@@ -84,24 +89,39 @@ def extract_gmail_body(payload: dict[str, Any]) -> str:
 
 def extract_gmail_attachments(payload: dict[str, Any]) -> list[MessageAttachment]:
     attachments: list[MessageAttachment] = []
+    filename_counts: dict[str, int] = {}
     for part in _walk_parts(payload):
         body = part.get("body", {})
-        attachment_id = body.get("attachmentId")
+        gmail_token = body.get("attachmentId")
         filename = part.get("filename")
-        if not attachment_id:
+        if not gmail_token:
             continue
         part_headers = part.get("headers", [])
         content_id = _header(part_headers, "Content-ID")
         disposition = (_header(part_headers, "Content-Disposition") or "").split(";")[0].strip().lower() or None
+
+        # Build a stable public ID that survives across message fetches.
+        # Gmail regenerates attachmentId on every request, so we cannot use it
+        # as the external identifier.
+        if content_id:
+            stable_id = content_id.strip("<>")
+        elif filename:
+            count = filename_counts.get(filename, 0)
+            stable_id = filename if count == 0 else f"{filename}_{count}"
+            filename_counts[filename] = count + 1
+        else:
+            continue
+
         attachments.append(
             MessageAttachment(
-                id=attachment_id,
-                filename=filename or (content_id or "attachment").strip("<>"),
+                id=stable_id,
+                filename=filename or stable_id,
                 size=int(body.get("size", 0)),
                 content_type=part.get("mimeType", "application/octet-stream"),
                 is_inline=disposition == "inline" or (content_id is not None and not filename),
                 content_id=content_id.strip("<>") if content_id else None,
                 content_disposition=disposition,
+                provider_id=gmail_token,
             )
         )
     return attachments
