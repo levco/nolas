@@ -22,6 +22,9 @@ class MessageAttachment(BaseModel):
     is_inline: bool = False
     content_id: str | None = None
     content_disposition: str | None = None
+    # Provider-native attachment token — excluded from API responses because it is
+    # unstable (Gmail regenerates it on every message fetch).
+    provider_id: str | None = Field(default=None, exclude=True)
 
 
 class AttachmentData(BaseModel):

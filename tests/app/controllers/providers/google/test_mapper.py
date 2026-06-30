@@ -77,7 +77,8 @@ class TestMapGmailMessage:
     def test_attachments(self) -> None:
         attachments = extract_gmail_attachments(_gmail_message()["payload"])
         assert len(attachments) == 1
-        assert attachments[0].id == "att-123"
+        assert attachments[0].id == "term-sheet.pdf"
+        assert attachments[0].provider_id == "att-123"
         assert attachments[0].filename == "term-sheet.pdf"
         assert attachments[0].size == 2048
         assert attachments[0].is_inline is False
@@ -106,7 +107,8 @@ class TestMapGmailMessage:
             }
         )
         attachments = extract_gmail_attachments(raw["payload"])
-        inline = [a for a in attachments if a.id == "att-inline"][0]
+        inline = [a for a in attachments if a.id == "logo@cid"][0]
+        assert inline.provider_id == "att-inline"
         assert inline.is_inline is True
         assert inline.content_id == "logo@cid"
 
