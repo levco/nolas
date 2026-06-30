@@ -10,9 +10,12 @@ from app.controllers.providers.base import (
     FolderData,
     ListMessagesParams,
     ListMessagesResult,
+    ListThreadsParams,
+    ListThreadsResult,
     ProviderClient,
     ProviderSendResult,
 )
+from app.controllers.providers.threads import build_threads_from_messages, filter_threads
 from app.models.account import Account
 from app.utils.message_utils import MessageUtils
 
@@ -86,6 +89,22 @@ class ImapProviderAdapter(ProviderClient):
 
         messages.sort(key=lambda m: m.date, reverse=True)
         return ListMessagesResult(messages=messages[: params.limit])
+
+    async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
+        message_params = ListMessagesParams(
+            limit=min(max(params.limit * 5, params.limit), MAX_UIDS_PER_FOLDER),
+            in_=params.in_,
+            from_=params.from_,
+            any_email=params.any_email,
+            subject=params.subject,
+            received_after=params.latest_message_after,
+            received_before=params.latest_message_before,
+            search_query_native=params.search_query_native,
+        )
+        message_result = await self.list_messages(account, message_params)
+        threads = build_threads_from_messages(message_result.messages)
+        filtered = filter_threads(threads, message_result.messages, params)
+        return ListThreadsResult(threads=filtered[: params.limit], next_cursor=None)
 
     def _build_search_criteria(self, params: ListMessagesParams) -> list[str]:
         """Each entry is an independent IMAP SEARCH whose results are unioned."""

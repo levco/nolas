@@ -16,6 +16,8 @@ from app.controllers.providers.base import (
     FolderData,
     ListMessagesParams,
     ListMessagesResult,
+    ListThreadsParams,
+    ListThreadsResult,
     ProviderClient,
     ProviderSendResult,
 )
@@ -30,6 +32,8 @@ from app.controllers.providers.google.mapper import (
     map_gmail_message,
 )
 from app.controllers.providers.google.query import build_gmail_query
+from app.controllers.providers.google.query import build_gmail_thread_query
+from app.controllers.providers.threads import build_threads_from_messages, filter_threads
 from app.controllers.providers.mime import build_mime_message
 from app.models.account import Account
 
@@ -80,6 +84,23 @@ class GmailClient(ProviderClient):
         ids = [item["id"] for item in listing.get("messages", [])]
         messages = await self._hydrate_messages(account, ids, params.include_headers)
         return ListMessagesResult(messages=messages, next_cursor=listing.get("nextPageToken"))
+
+    async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
+        query = build_gmail_thread_query(params)
+        query_params: dict[str, Any] = {"maxResults": params.limit, "q": query}
+        if params.page_token:
+            query_params["pageToken"] = params.page_token
+
+        listing = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/threads", params=query_params)
+        thread_ids = [item["id"] for item in listing.get("threads", [])]
+        messages_by_thread = await self._hydrate_threads(account, thread_ids)
+        all_messages = [message for thread_id in thread_ids for message in messages_by_thread.get(thread_id, [])]
+
+        threads = build_threads_from_messages(all_messages)
+        thread_by_id = {thread.id: thread for thread in threads}
+        ordered_threads = [thread_by_id[thread_id] for thread_id in thread_ids if thread_id in thread_by_id]
+        filtered = filter_threads(ordered_threads, all_messages, params)
+        return ListThreadsResult(threads=filtered[: params.limit], next_cursor=listing.get("nextPageToken"))
 
     async def send_message(
         self,
@@ -233,6 +254,30 @@ class GmailClient(ProviderClient):
         ]
         messages = _filter_in_memory(messages, params)
         return ListMessagesResult(messages=messages[: params.limit])
+
+    async def _hydrate_threads(self, account: Account, thread_ids: list[str]) -> dict[str, list[Message]]:
+        if not thread_ids:
+            return {}
+
+        semaphore = asyncio.Semaphore(FALLBACK_FETCH_CONCURRENCY)
+        messages_by_thread: dict[str, list[Message]] = {}
+
+        async def fetch(thread_id: str) -> None:
+            async with semaphore:
+                try:
+                    thread = await self._http.request(
+                        account, "GET", f"{GMAIL_API_BASE}/threads/{thread_id}", params={"format": "full"}
+                    )
+                except ProviderNotFoundError:
+                    return
+                messages_by_thread[thread_id] = [
+                    map_gmail_message(raw, account.uuid, include_headers=False)
+                    for raw in thread.get("messages", [])
+                    if "DRAFT" not in raw.get("labelIds", [])
+                ]
+
+        await asyncio.gather(*[fetch(thread_id) for thread_id in thread_ids])
+        return messages_by_thread
 
     async def _hydrate_messages(self, account: Account, ids: list[str], include_headers: bool) -> list[Message]:
         if not ids:

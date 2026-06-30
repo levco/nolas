@@ -3,23 +3,38 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.api.payloads.messages import AttachmentData, EmailAddress, Message, MessageAttachment
+from app.api.payloads.messages import (
+    AttachmentData,
+    EmailAddress,
+    Message,
+    MessageAttachment,
+)
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
     ListMessagesParams,
     ListMessagesResult,
+    ListThreadsParams,
+    ListThreadsResult,
     ProviderClient,
     ProviderSendResult,
 )
 from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError
 from app.controllers.providers.http import AuthorizedHttpClient
-from app.controllers.providers.microsoft.mapper import graph_folder_name, map_graph_attachment, map_graph_message
+from app.controllers.providers.microsoft.mapper import (
+    graph_folder_name,
+    map_graph_attachment,
+    map_graph_message,
+)
 from app.controllers.providers.microsoft.query import (
     build_graph_filter,
     build_graph_search,
     decode_cursor,
     encode_cursor,
+)
+from app.controllers.providers.threads import (
+    build_threads_from_messages,
+    filter_threads,
 )
 from app.models.account import Account
 
@@ -32,6 +47,10 @@ IMMUTABLE_ID_HEADER = {"Prefer": 'IdType="ImmutableId"'}
 MESSAGE_SELECT_FIELDS = (
     "id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,"
     "replyTo,receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments,internetMessageId"
+)
+THREAD_MESSAGE_SELECT_FIELDS = (
+    "id,conversationId,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,"
+    "receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments"
 )
 ATTACHMENT_SELECT_FIELDS = "id,name,contentType,size,isInline"
 
@@ -103,6 +122,27 @@ class GraphClient(ProviderClient):
         )
         return self._build_list_result(account, response, params)
 
+    async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
+        message_params = ListMessagesParams(
+            limit=min(max(params.limit * 5, params.limit), 100),
+            page_token=params.page_token,
+            in_=params.in_,
+            from_=params.from_,
+            any_email=params.any_email,
+            subject=params.subject,
+            received_after=params.latest_message_after,
+            received_before=params.latest_message_before,
+            search_query_native=params.search_query_native,
+        )
+        response = await self._list_thread_messages_raw(account, message_params)
+        messages = self._build_thread_messages(account, response)
+        threads = build_threads_from_messages(messages)
+        filtered = filter_threads(threads, messages, params)
+        next_link = response.get("@odata.nextLink")
+        return ListThreadsResult(
+            threads=filtered[: params.limit], next_cursor=encode_cursor(next_link) if next_link else None
+        )
+
     def _build_list_result(
         self, account: Account, response: dict[str, Any], params: ListMessagesParams
     ) -> ListMessagesResult:
@@ -113,6 +153,55 @@ class GraphClient(ProviderClient):
         ]
         next_link = response.get("@odata.nextLink")
         return ListMessagesResult(messages=messages, next_cursor=encode_cursor(next_link) if next_link else None)
+
+    async def _list_thread_messages_raw(self, account: Account, params: ListMessagesParams) -> dict[str, Any]:
+        if params.page_token:
+            return await self._http.request(
+                account, "GET", decode_cursor(params.page_token), headers=IMMUTABLE_ID_HEADER
+            )
+
+        query: dict[str, Any] = {
+            "$top": min(params.limit, 100),
+            "$select": THREAD_MESSAGE_SELECT_FIELDS,
+        }
+
+        search = build_graph_search(params)
+        if search:
+            # $search cannot be combined with $filter/$orderby.
+            query["$search"] = f'"{search}"'
+        else:
+            graph_filter = build_graph_filter(params)
+            if graph_filter:
+                query["$filter"] = graph_filter
+            if not params.search_query_native:
+                if params.received_after is not None or params.received_before is not None:
+                    query["$orderby"] = "receivedDateTime desc"
+
+        return await self._http.request(
+            account, "GET", f"{GRAPH_API_BASE}/me/messages", params=query, headers=IMMUTABLE_ID_HEADER
+        )
+
+    def _build_thread_messages(self, account: Account, response: dict[str, Any]) -> list[Message]:
+        messages: list[Message] = []
+        for raw in response.get("value", []):
+            if raw.get("isDraft", False):
+                continue
+            message = map_graph_message(raw, account.uuid, include_headers=False)
+            # list_threads uses a compact $select without attachment expansion.
+            # Preserve hasAttachments semantics with a lightweight placeholder.
+            if raw.get("hasAttachments", False):
+                message.attachments = [
+                    MessageAttachment(
+                        id=f"{message.id}-attachment-placeholder",
+                        filename="attachment",
+                        size=0,
+                        content_type="application/octet-stream",
+                    )
+                ]
+            else:
+                message.attachments = []
+            messages.append(message)
+        return messages
 
     async def send_message(
         self,

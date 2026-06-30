@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+from app.controllers.providers.base import ListThreadsParams
 from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
 
 if "aiohttp" not in sys.modules:
@@ -50,6 +51,34 @@ def _raw_message(message_id: str) -> dict[str, Any]:
             "headers": [
                 {"name": "Subject", "value": f"subject-{message_id}"},
                 {"name": "From", "value": "Sender <sender@example.com>"},
+            ],
+            "parts": [
+                {
+                    "mimeType": "text/plain",
+                    "body": {"data": _b64(f"body-{message_id}")},
+                }
+            ],
+        },
+    }
+
+
+def _raw_thread_message(message_id: str, thread_id: str, starred: bool = False, unread: bool = True) -> dict[str, Any]:
+    labels = ["INBOX"]
+    if starred:
+        labels.append("STARRED")
+    if unread:
+        labels.append("UNREAD")
+    return {
+        "id": message_id,
+        "threadId": thread_id,
+        "labelIds": labels,
+        "snippet": f"snippet-{message_id}",
+        "internalDate": "1717920000000",
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": f"subject-{thread_id}"},
+                {"name": "From", "value": "Sender <sender@example.com>"},
+                {"name": "To", "value": "Receiver <receiver@example.com>"},
             ],
             "parts": [
                 {
@@ -204,3 +233,43 @@ class TestGmailClientBatchHydration:
         assert [message.id for message in messages] == ["m1"]
         assert http.request.await_count == 2
         assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
+
+
+class TestGmailClientThreads:
+    def test_lists_threads_from_gmail_threads_endpoint(self) -> None:
+        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
+            assert method == "GET"
+            if url.endswith("/threads"):
+                assert kwargs["params"]["maxResults"] == 2
+                assert "in:INBOX" in kwargs["params"]["q"]
+                return {"threads": [{"id": "t1"}, {"id": "t2"}], "nextPageToken": "cursor-2"}
+            if url.endswith("/threads/t1"):
+                first = _raw_thread_message("m1", "t1", starred=False, unread=True)
+                second = _raw_thread_message("m2", "t1", starred=True, unread=False)
+                second["internalDate"] = "1717930000000"
+                second["payload"]["parts"].append(
+                    {
+                        "filename": "invoice.pdf",
+                        "mimeType": "application/pdf",
+                        "body": {"attachmentId": "att-1", "size": 12},
+                    }
+                )
+                return {"id": "t1", "messages": [first, second]}
+            if url.endswith("/threads/t2"):
+                return {"id": "t2", "messages": [_raw_thread_message("m3", "t2", starred=False, unread=False)]}
+            raise AssertionError(f"Unexpected request: {url}")
+
+        http = SimpleNamespace(request=AsyncMock(side_effect=request))
+        client = GmailClient(http)
+
+        result = asyncio.run(client.list_threads(_account(), ListThreadsParams(limit=2, in_="INBOX")))
+
+        assert [thread.id for thread in result.threads] == ["t1", "t2"]
+        assert result.next_cursor == "cursor-2"
+        assert result.threads[0].latest_message_received_date == 1717930000
+        assert result.threads[0].earliest_message_date == 1717920000
+        assert result.threads[0].has_attachments is True
+        assert result.threads[0].starred is True
+        assert result.threads[0].unread is True
+        assert result.threads[0].message_ids == ["m2", "m1"]
+        assert result.threads[0].latest_draft_or_message.id == "m2"

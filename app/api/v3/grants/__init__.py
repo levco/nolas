@@ -24,6 +24,7 @@ from app.models.app import App
 from .attachments import router as attachments_router
 from .folders import router as folders_router
 from .messages import router as messages_router
+from .threads import router as threads_router
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -31,6 +32,7 @@ router = APIRouter()
 # Include sub-routers under grants
 router.include_router(attachments_router, prefix="/{grant_id}/attachments", tags=["attachments"])
 router.include_router(messages_router, prefix="/{grant_id}/messages", tags=["messages"])
+router.include_router(threads_router, prefix="/{grant_id}/threads", tags=["threads"])
 router.include_router(folders_router, prefix="/{grant_id}/folders", tags=["folders"])
 
 

@@ -7,6 +7,7 @@ from app.api.payloads.messages import (
     Message,
     MessageAttachment,
 )
+from app.api.payloads.threads import Thread
 from app.models.account import Account
 
 
@@ -31,6 +32,34 @@ class ListMessagesParams:
 @dataclass
 class ListMessagesResult:
     messages: list[Message]
+    next_cursor: str | None = None
+
+
+@dataclass
+class ListThreadsParams:
+    """Normalized Nylas v3 threads.list query parameters."""
+
+    limit: int = 20
+    page_token: str | None = None
+    in_: str | None = None
+    from_: str | None = None
+    to: str | None = None
+    cc: str | None = None
+    bcc: str | None = None
+    any_email: list[str] = field(default_factory=list)
+    subject: str | None = None
+    latest_message_after: int | None = None
+    latest_message_before: int | None = None
+    unread: bool | None = None
+    starred: bool | None = None
+    has_attachment: bool | None = None
+    # Provider-native query (Microsoft Graph $filter / Gmail q) passed through verbatim.
+    search_query_native: str | None = None
+
+
+@dataclass
+class ListThreadsResult:
+    threads: list[Thread]
     next_cursor: str | None = None
 
 
@@ -65,6 +94,10 @@ class ProviderClient(ABC):
 
     @abstractmethod
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
         raise NotImplementedError
 
     @abstractmethod
