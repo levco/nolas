@@ -87,7 +87,7 @@ def extract_gmail_body(payload: dict[str, Any]) -> str:
     return html or text
 
 
-def extract_gmail_attachments(payload: dict[str, Any]) -> list[MessageAttachment]:
+def extract_gmail_attachments(payload: dict[str, Any], html_body: str = "") -> list[MessageAttachment]:
     attachments: list[MessageAttachment] = []
     filename_counts: dict[str, int] = {}
     for part in _walk_parts(payload):
@@ -112,14 +112,17 @@ def extract_gmail_attachments(payload: dict[str, Any]) -> list[MessageAttachment
         else:
             continue
 
+        cid_value = content_id.strip("<>") if content_id else None
+        is_inline = disposition == "inline" or (cid_value is not None and f"cid:{cid_value}" in html_body)
+
         attachments.append(
             MessageAttachment(
                 id=stable_id,
                 filename=filename or stable_id,
                 size=int(body.get("size", 0)),
                 content_type=part.get("mimeType", "application/octet-stream"),
-                is_inline=disposition == "inline" or (content_id is not None and not filename),
-                content_id=content_id.strip("<>") if content_id else None,
+                is_inline=is_inline,
+                content_id=cid_value,
                 content_disposition=disposition,
                 provider_id=gmail_token,
             )
@@ -162,7 +165,7 @@ def map_gmail_message(raw: dict[str, Any], grant_id: UUID, include_headers: bool
         unread="UNREAD" in label_ids,
         starred="STARRED" in label_ids,
         folders=folders,
-        attachments=extract_gmail_attachments(payload),
+        attachments=extract_gmail_attachments(payload, html_body=body),
         headers=message_headers,
     )
 
