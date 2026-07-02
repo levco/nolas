@@ -1,5 +1,6 @@
 import logging
 import time
+from email.headerregistry import Address
 from email.message import Message as PythonEmailMessage
 from email.utils import getaddresses, mktime_tz, parsedate_tz
 from uuid import UUID
@@ -166,19 +167,11 @@ class MessageUtils:
         return message_id
 
     @staticmethod
-    def format_email_addresses(addresses: list[EmailAddress]) -> str:
-        """Format a list of email addresses for email headers."""
-        if not addresses:
-            return ""
-
-        formatted_addresses = []
-        for addr in addresses:
-            if addr.name:
-                formatted_addresses.append(f'"{addr.name}" <{addr.email}>')
-            else:
-                formatted_addresses.append(f'"{addr.email}" <{addr.email}>')
-
-        return ", ".join(formatted_addresses)
+    def to_header_addresses(addresses: list[EmailAddress]) -> list[Address]:
+        """Convert email addresses into `email.headerregistry.Address` objects for use as
+        header values on a `Message` built with `policy=email.policy.default`, which encodes
+        the display name (and only the display name) per RFC 2047 automatically."""
+        return [Address(display_name=addr.name or addr.email, addr_spec=addr.email) for addr in addresses]
 
     @staticmethod
     def extract_attachments(msg: PythonEmailMessage) -> list[MessageAttachment]:

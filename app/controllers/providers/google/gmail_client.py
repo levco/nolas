@@ -170,14 +170,18 @@ class GmailClient(ProviderClient):
             + f"\r\n--{boundary}--".encode()
         )
 
-        response = await self._http.request(
-            account,
-            "POST",
-            f"{GMAIL_UPLOAD_BASE}/messages/send",
-            params={"uploadType": "multipart"},
-            data=multipart_body,
-            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
-        )
+        try:
+            response = await self._http.request(
+                account,
+                "POST",
+                f"{GMAIL_UPLOAD_BASE}/messages/send",
+                params={"uploadType": "multipart"},
+                data=multipart_body,
+                headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+            )
+        except ProviderError as e:
+            logger.exception(f"Gmail send failed: {e}")
+            raise e
 
         message_id = response.get("id")
         if not message_id:

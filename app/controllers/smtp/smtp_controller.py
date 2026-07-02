@@ -4,12 +4,8 @@ SMTP controller for sending emails.
 
 import logging
 import smtplib
-import uuid
 from dataclasses import dataclass
-from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.utils import formatdate
 from typing import Any
 
 from app.api.payloads.messages import (
@@ -21,6 +17,7 @@ from app.api.payloads.messages import (
 from app.controllers.email.message import MessageResult, SendMessageResult
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
+from app.controllers.providers.mime import build_email_message
 from app.models.account import Account
 from app.utils.message_utils import MessageUtils
 from app.utils.password import PasswordUtils
@@ -186,65 +183,20 @@ class SMTPController:
         attachments: list[AttachmentData] | None = None,
     ) -> MIMEMultipart:
         """Create email message."""
-        # Use "mixed" if there are attachments, otherwise "alternative"
-        message_type = "mixed" if attachments else "alternative"
-        message = MIMEMultipart(message_type)
-
-        message["Subject"] = subject
-        message["Date"] = formatdate(localtime=True)
-
-        # From header
-        if from_ and len(from_) > 0:
-            sender = from_[0]
-            if sender.name:
-                message["From"] = f'"{sender.name}" <{sender.email}>'
-            else:
-                message["From"] = f'"{sender.email}" <{sender.email}>'
-        else:
-            message["From"] = f'"{account.email}" <{account.email}>'
-
-        # To, Cc, Bcc headers
-        if to:
-            message["To"] = MessageUtils.format_email_addresses(to)
-        if cc:
-            message["Cc"] = MessageUtils.format_email_addresses(cc)
-        if bcc:
-            message["Bcc"] = MessageUtils.format_email_addresses(bcc)
-
-        # Reply-To header
-        if reply_to:
-            message["Reply-To"] = MessageUtils.format_email_addresses(reply_to)
-
-        # In-Reply-To header and References
-        if reply_to_message_id:
-            message["In-Reply-To"] = MessageUtils.format_message_id(reply_to_message_id)
-        if references:
-            message["References"] = " ".join(references)
-
-        # Generate Message-ID
-        message_id = f"<{uuid.uuid4()}@{account.email.split('@')[1]}>"
-        message["Message-ID"] = message_id
-
-        # Body
-        if attachments:
-            # When there are attachments, create a separate container for text content
-            text_container = MIMEMultipart("alternative")
-            html_part = MIMEText(body, "html", "utf-8")
-            text_container.attach(html_part)
-            message.attach(text_container)
-        else:
-            # No attachments, attach HTML directly
-            html_part = MIMEText(body, "html", "utf-8")
-            message.attach(html_part)
-
-        if attachments:
-            for attachment in attachments:
-                attachment_part = MIMEApplication(attachment.data, name=attachment.filename)
-                attachment_part.add_header("Content-Disposition", f"attachment; filename={attachment.filename}")
-                if attachment.content_type:
-                    attachment_part.set_type(attachment.content_type)
-                message.attach(attachment_part)
-
+        sender = from_[0] if from_ else EmailAddress(name=account.email, email=account.email)
+        message, _ = build_email_message(
+            to=to,
+            subject=subject,
+            body=body,
+            from_=[sender],
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            attachments=attachments,
+            in_reply_to=MessageUtils.format_message_id(reply_to_message_id) if reply_to_message_id else None,
+            references=" ".join(references) if references else None,
+            sender_domain=sender.email.split("@")[-1] if "@" in sender.email else None,
+        )
         return message
 
     async def _send_smtp_message(
