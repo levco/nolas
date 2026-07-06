@@ -20,6 +20,7 @@ class SubscriptionManager:
         self._account_repo = account_repo
         self._gmail = gmail_client
         self._graph = graph_client
+        self._logger = logging.getLogger(__name__)
 
     async def ensure_subscription(self, account: Account) -> None:
         if account.provider == AccountProvider.google:
@@ -32,6 +33,7 @@ class SubscriptionManager:
             logger.warning("GOOGLE_PUBSUB_TOPIC not configured; skipping Gmail watch setup")
             return
         response = await self._gmail.watch(account, settings.google.pubsub_topic)
+        self._logger.info(f"Gmail watch response: {response}")
         context: dict[str, Any] = {**(account.provider_context or {})}
         # expiration is epoch millis as string.
         context["watch_expiration"] = int(int(response.get("expiration", 0)) / 1000)
