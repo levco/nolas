@@ -4,7 +4,7 @@ import multiprocessing as mp
 from typing import Sequence
 
 from app.controllers.imap.listener import IMAPListener
-from app.models.account import Account
+from app.models.account import Account, AccountProvider
 from app.repos.account import AccountRepo
 from settings import settings
 from workers.imap.imap_worker import start_worker_blocking
@@ -58,8 +58,7 @@ class IMAPClusterManager:
     async def _load_accounts(self) -> Sequence[Account]:
         """Load accounts from database using repository."""
         try:
-            accounts_result = await self._account_repo.get_all_active()
-            return accounts_result.all()
+            return await self._account_repo.get_all_active_by_providers([AccountProvider.imap])
         except Exception:
             logger.exception("Failed to load accounts")
         return []

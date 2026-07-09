@@ -3,6 +3,7 @@ import secrets
 import time
 from typing import Any
 
+from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.controllers.providers.exceptions import ProviderAuthError, ProviderError
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.microsoft.graph_client import GraphClient
@@ -16,10 +17,17 @@ logger = logging.getLogger(__name__)
 class SubscriptionManager:
     """Creates and renews Gmail watches and Microsoft Graph change-notification subscriptions."""
 
-    def __init__(self, account_repo: AccountRepo, gmail_client: GmailClient, graph_client: GraphClient) -> None:
+    def __init__(
+        self,
+        account_repo: AccountRepo,
+        gmail_client: GmailClient,
+        graph_client: GraphClient,
+        incoming_notification_controller: IncomingNotificationController,
+    ) -> None:
         self._account_repo = account_repo
         self._gmail = gmail_client
         self._graph = graph_client
+        self._incoming_notification_controller = incoming_notification_controller
         self._logger = logging.getLogger(__name__)
 
     async def ensure_subscription(self, account: Account) -> None:
@@ -37,11 +45,14 @@ class SubscriptionManager:
         context: dict[str, Any] = {**(account.provider_context or {})}
         # expiration is epoch millis as string.
         context["watch_expiration"] = int(int(response.get("expiration", 0)) / 1000)
-        # Prime the history cursor on first setup only — history.list resumes from here.
-        if not context.get("history_id") and response.get("historyId"):
-            context["history_id"] = str(response["historyId"])
         await self._account_repo.update(account, {"provider_context": context}, do_commit=False)
         logger.info(f"Gmail watch ensured for {account.email} (expires {context['watch_expiration']})")
+
+        history_id = response.get("historyId")
+        if history_id:
+            # Prime the cursor on first setup, or catch up on any history missed while the
+            # previous watch was expiring/being renewed (e.g. a dropped push notification).
+            await self._incoming_notification_controller.catch_up_google_history(account, str(history_id))
 
     async def _ensure_microsoft_subscription(self, account: Account) -> None:
         if not settings.api.public_base_url:

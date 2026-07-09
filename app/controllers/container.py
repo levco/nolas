@@ -95,20 +95,6 @@ class ControllerContainer(containers.DeclarativeContainer):
         imap_adapter=imap_provider_adapter,
     )
 
-    subscription_manager = providers.Singleton(
-        SubscriptionManager,
-        account_repo=repos.account,
-        gmail_client=gmail_client,
-        graph_client=graph_client,
-    )
-
-    custom_auth_controller = providers.Singleton(
-        CustomAuthController,
-        account_repo=repos.account,
-        token_service=token_service,
-        subscription_manager=subscription_manager,
-    )
-
     incoming_notification_controller = providers.Singleton(
         IncomingNotificationController,
         account_repo=repos.account,
@@ -116,6 +102,21 @@ class ControllerContainer(containers.DeclarativeContainer):
         job_repo=repos.job,
         gmail_client=gmail_client,
         graph_client=graph_client,
+    )
+
+    subscription_manager = providers.Singleton(
+        SubscriptionManager,
+        account_repo=repos.account,
+        gmail_client=gmail_client,
+        graph_client=graph_client,
+        incoming_notification_controller=incoming_notification_controller,
+    )
+
+    custom_auth_controller = providers.Singleton(
+        CustomAuthController,
+        account_repo=repos.account,
+        token_service=token_service,
+        subscription_manager=subscription_manager,
     )
 
     notification_queue = providers.Singleton(

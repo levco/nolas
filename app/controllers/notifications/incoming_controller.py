@@ -56,14 +56,19 @@ class IncomingNotificationController:
                 if account.status != AccountStatus.active:
                     logger.info(f"Account {account.email} is not active; skipping")
                     continue
-                await self._process_google_account(account, history_id)
+                await self.catch_up_google_history(account, history_id)
                 logger.info(f"Processed account: {account.email}")
             except ProviderAuthError:
                 logger.warning(f"Auth failure processing Gmail notification for {account.email}")
             except Exception:
                 logger.exception(f"Failed to process Gmail notification for {account.email}")
 
-    async def _process_google_account(self, account: Account, notified_history_id: str) -> None:
+    async def catch_up_google_history(self, account: Account, notified_history_id: str) -> None:
+        """Fetch and process any Gmail history between the stored cursor and `notified_history_id`.
+
+        Used both for live Pub/Sub notifications and for watch-renewal, where the new watch's
+        historyId may be ahead of our cursor if a push notification was missed during the gap.
+        """
         context: dict[str, Any] = {**(account.provider_context or {})}
         start_history_id = context.get("history_id")
         if not start_history_id:

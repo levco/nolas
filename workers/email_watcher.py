@@ -14,6 +14,7 @@ import sentry_sdk
 
 from app.container import get_wire_container
 from app.db import fastapi_sqlalchemy_context
+from app.models.account import AccountProvider
 from logging_config import setup_logging
 from settings import settings
 from workers.cluster_manager import IMAPClusterManager
@@ -31,7 +32,7 @@ container = get_wire_container()
 async def main() -> None:
     async with fastapi_sqlalchemy_context():
         account_repo = container.repos.account()
-        active_accounts = (await account_repo.get_all_active()).all()
+        active_accounts = await account_repo.get_all_active_by_providers([AccountProvider.imap])
         if len(active_accounts) == 0:
             logger.debug("No active accounts found.")
             return
@@ -53,7 +54,7 @@ async def run_single_worker_mode() -> None:
         imap_listener = container.controllers.imap_listener()
 
         account_repo = container.repos.account()
-        active_accounts = (await account_repo.get_all_active()).all()
+        active_accounts = await account_repo.get_all_active_by_providers([AccountProvider.imap])
         logger.info(f"Found {len(active_accounts)} active accounts")
 
         # Create single worker config
