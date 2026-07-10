@@ -108,6 +108,8 @@ class IncomingNotificationController:
             logger.warning(f"Gmail history expired for {account.email}; cursor reset")
             return
 
+        if message_ids:
+            logger.info(f"Processing Gmail messages; email={account.email}, ids={message_ids}")
         for message_id in dict.fromkeys(message_ids):
             await self._emit_message_created(account, message_id, provider=AccountProvider.google)
 
