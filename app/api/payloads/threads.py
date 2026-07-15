@@ -17,8 +17,10 @@ class Thread(BaseModel):
     snippet: str
     participants: list[EmailAddress] = Field(default_factory=list)
     message_ids: list[str] = Field(default_factory=list)
+    folders: list[str] = Field(default_factory=list)
     latest_draft_or_message: Message
     has_attachments: bool = False
+    has_drafts: bool = False
     starred: bool = False
     unread: bool = False
     latest_message_received_date: int
@@ -31,3 +33,10 @@ class ThreadListResponse(BaseModel):
     request_id: str
     data: list[Thread]
     next_cursor: str | None = None
+
+
+class ThreadResponse(BaseModel):
+    """Response model for getting a single thread."""
+
+    request_id: str
+    data: Thread

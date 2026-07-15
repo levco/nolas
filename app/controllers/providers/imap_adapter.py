@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 
 from app.api.payloads.messages import AttachmentData, EmailAddress, Message, MessageAttachment
+from app.api.payloads.threads import Thread
 from app.controllers.email.email_controller import EmailController
 from app.controllers.imap.connection import ConnectionManager
 from app.controllers.imap.folder_utils import FolderUtils
@@ -105,6 +106,14 @@ class ImapProviderAdapter(ProviderClient):
         threads = build_threads_from_messages(message_result.messages)
         filtered = filter_threads(threads, message_result.messages, params)
         return ListThreadsResult(threads=filtered[: params.limit], next_cursor=None)
+
+    async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
+        message_params = ListMessagesParams(thread_id=thread_id, limit=MAX_UIDS_PER_FOLDER)
+        message_result = await self.list_messages(account, message_params)
+        if not message_result.messages:
+            return None
+        threads = build_threads_from_messages(message_result.messages)
+        return threads[0] if threads else None
 
     def _build_search_criteria(self, params: ListMessagesParams) -> list[str]:
         """Each entry is an independent IMAP SEARCH whose results are unioned."""

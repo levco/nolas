@@ -179,7 +179,10 @@ async def list_messages(
         500: {"model": APIError, "description": "Internal server error"},
     },
     summary="Send a message",
-    description="Sends an email message through the specified grant's email account. Supports both JSON and multipart form data (for attachments).",
+    description=(
+        "Sends an email message through the specified grant's email account. Supports both JSON and multipart form "
+        "data (for attachments)."
+    ),
 )
 @inject
 async def send_message(

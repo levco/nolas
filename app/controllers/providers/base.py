@@ -101,6 +101,10 @@ class ProviderClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
+        raise NotImplementedError
+
+    @abstractmethod
     async def send_message(
         self,
         account: Account,

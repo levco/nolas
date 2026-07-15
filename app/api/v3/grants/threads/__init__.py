@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
-from app.api.payloads.threads import ThreadListResponse
+from app.api.payloads.threads import ThreadListResponse, ThreadResponse
 from app.api.utils.errors import create_error_response, provider_error_response, validate_grant_access
 from app.container import ApplicationContainer
 from app.controllers.providers.base import ListThreadsParams
@@ -21,6 +21,56 @@ from app.models.app import App
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get(
+    "/{thread_id}",
+    response_model=ThreadResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": APIError, "description": "Invalid grant"},
+        404: {"model": APIError, "description": "Thread not found"},
+        500: {"model": APIError, "description": "Internal server error"},
+    },
+    summary="Get a specific thread",
+    description="Gets a specific thread by ID for the specified grant",
+)
+@inject
+async def get_thread(
+    grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
+    thread_id: str = Path(..., example="19f376d9516d4c5a"),
+    app: App = Depends(get_current_app),
+    registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
+) -> ThreadResponse | JSONResponse:
+    logger.info(f"Fetching thread {thread_id} for grant {grant_id}")
+    account, error_response = await validate_grant_access(app.id, grant_id)
+    if error_response:
+        return error_response
+    assert account is not None  # account is guaranteed to be not None when error_response is None
+
+    try:
+        thread = await registry.get_client(account).get_thread(account, thread_id)
+        if thread is None:
+            return create_error_response(
+                error_type="not_found_error",
+                message="requested object not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                provider_error={"code": "NotFoundError", "message": "Requested object not found"},
+            )
+        return ThreadResponse(request_id=str(uuid.uuid4()), data=thread)
+    except ProviderError as e:
+        return provider_error_response(e)
+    except Exception:
+        logger.exception(f"Failed to fetch thread {thread_id}")
+        return create_error_response(
+            error_type="provider_error",
+            message="Failed to fetch thread",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            provider_error={
+                "code": "InternalError",
+                "message": "An unexpected error occurred when fetching the thread",
+            },
+        )
 
 
 @router.get(

@@ -11,6 +11,7 @@ from app.api.payloads.messages import (
     Message,
     MessageAttachment,
 )
+from app.api.payloads.threads import Thread
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
@@ -106,6 +107,24 @@ class GmailClient(ProviderClient):
         ordered_threads = [thread_by_id[thread_id] for thread_id in thread_ids if thread_id in thread_by_id]
         filtered = filter_threads(ordered_threads, all_messages, params)
         return ListThreadsResult(threads=filtered[: params.limit], next_cursor=listing.get("nextPageToken"))
+
+    async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
+        try:
+            thread = await self._http.request(
+                account, "GET", f"{GMAIL_API_BASE}/threads/{thread_id}", params={"format": "full"}
+            )
+        except ProviderNotFoundError:
+            return None
+
+        messages = [
+            map_gmail_message(raw, account.uuid, include_headers=False)
+            for raw in thread.get("messages", [])
+            if "DRAFT" not in raw.get("labelIds", [])
+        ]
+        if not messages:
+            return None
+        threads = build_threads_from_messages(messages)
+        return threads[0] if threads else None
 
     async def send_message(
         self,

@@ -17,11 +17,14 @@ def build_threads_from_messages(messages: list[Message]) -> list[Thread]:
         earliest = ordered[-1]
 
         participants_by_email: dict[str, EmailAddress] = {}
+        folders: dict[str, None] = {}
         for message in ordered:
             for address in [*message.from_, *message.to, *message.cc, *message.bcc]:
                 key = address.email.lower()
                 if key not in participants_by_email:
                     participants_by_email[key] = address
+            for folder in message.folders:
+                folders.setdefault(folder, None)
 
         threads.append(
             Thread(
@@ -31,6 +34,7 @@ def build_threads_from_messages(messages: list[Message]) -> list[Thread]:
                 snippet=latest.snippet,
                 participants=list(participants_by_email.values()),
                 message_ids=[message.id for message in ordered],
+                folders=list(folders),
                 # Draft support can replace this later; for now mirror Nylas shape
                 # with the latest non-draft message in the thread.
                 latest_draft_or_message=latest,

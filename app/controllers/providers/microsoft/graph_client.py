@@ -9,6 +9,7 @@ from app.api.payloads.messages import (
     Message,
     MessageAttachment,
 )
+from app.api.payloads.threads import Thread
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
@@ -142,6 +143,15 @@ class GraphClient(ProviderClient):
         return ListThreadsResult(
             threads=filtered[: params.limit], next_cursor=encode_cursor(next_link) if next_link else None
         )
+
+    async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
+        message_params = ListMessagesParams(thread_id=thread_id, limit=100)
+        response = await self._list_thread_messages_raw(account, message_params)
+        messages = self._build_thread_messages(account, response)
+        if not messages:
+            return None
+        threads = build_threads_from_messages(messages)
+        return threads[0] if threads else None
 
     def _build_list_result(
         self, account: Account, response: dict[str, Any], params: ListMessagesParams
