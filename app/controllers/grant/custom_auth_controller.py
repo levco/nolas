@@ -47,17 +47,19 @@ class CustomAuthController:
         account = await self._account_repo.get_by_app_and_email(app.id, email)
         if account is not None:
             # Re-auth of an existing grant: keep the UUID (grant id) stable.
+            context = {
+                key: value
+                for key, value in (account.provider_context or {}).items()
+                if key not in ("access_token", "access_token_expires_at")
+                and not (provider == AccountProvider.google and key == "history_id")
+            }
             await self._account_repo.update(
                 account,
                 {
                     "provider": provider,
                     "credentials": PasswordUtils.encrypt_password(effective_refresh_token),
                     "status": AccountStatus.active,
-                    "provider_context": {
-                        key: value
-                        for key, value in (account.provider_context or {}).items()
-                        if key not in ("access_token", "access_token_expires_at")
-                    },
+                    "provider_context": context,
                 },
                 do_commit=False,
             )
@@ -94,6 +96,7 @@ class CustomAuthController:
             key: value
             for key, value in (account.provider_context or {}).items()
             if key not in ("access_token", "access_token_expires_at")
+            and not (account.provider == AccountProvider.google and key == "history_id")
         }
         await self._account_repo.update(
             account,
