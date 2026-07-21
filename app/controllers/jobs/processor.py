@@ -121,17 +121,17 @@ class JobProcessorController:
 
     async def _dispatch(self, job: Job) -> None:
         if job.type == JobType.google_notification:
-            payload = GoogleNotificationJobPayload.model_validate(job.payload)
-            email_address = payload.email_address.strip().lower()
-            history_id = payload.history_id.strip()
+            google_payload = GoogleNotificationJobPayload.model_validate(job.payload)
+            email_address = google_payload.email_address.strip().lower()
+            history_id = google_payload.history_id.strip()
             if not email_address or not history_id:
                 raise ValueError("google_notification payload cannot be blank")
             await self._incoming_notification_controller.process_google_notification(email_address, history_id)
             return
 
         if job.type == JobType.microsoft_notification:
-            payload = MicrosoftNotificationJobPayload.model_validate(job.payload)
-            await self._incoming_notification_controller.process_microsoft_notification(payload.notification)
+            msft_payload = MicrosoftNotificationJobPayload.model_validate(job.payload)
+            await self._incoming_notification_controller.process_microsoft_notification(msft_payload.notification)
             return
 
         if job.type == JobType.subscription_renewal_check:
@@ -143,13 +143,14 @@ class JobProcessorController:
             )
             await self.enqueue_subscription_renewal_check(available_at=next_run_at)
             logger.info(
-                f"subscription_renewal_check enqueued {enqueued} renewal job(s); next check at {next_run_at.isoformat()}"
+                f"subscription_renewal_check enqueued {enqueued} renewal job(s); next check at "
+                f"{next_run_at.isoformat()}"
             )
             return
 
         if job.type == JobType.subscription_renewal:
-            payload = SubscriptionRenewalJobPayload.model_validate(job.payload)
-            account_id_raw = payload.account_id
+            renewal_payload = SubscriptionRenewalJobPayload.model_validate(job.payload)
+            account_id_raw = renewal_payload.account_id
 
             account = await self._account_repo.get(account_id_raw)
             if account is None:
@@ -162,8 +163,8 @@ class JobProcessorController:
             return
 
         if job.type == JobType.webhook_delivery:
-            payload = WebhookDeliveryJobPayload.model_validate(job.payload)
-            account_id_raw = payload.account_id
+            webhook_payload = WebhookDeliveryJobPayload.model_validate(job.payload)
+            account_id_raw = webhook_payload.account_id
 
             account = await self._account_repo.get_by_id_with_app(account_id_raw)
             if account is None:
@@ -172,17 +173,17 @@ class JobProcessorController:
 
             delivered = await self._webhook_sender.send_event(
                 account=account,
-                event_type=payload.event_type,
-                object_data=payload.object_data,
-                source=payload.source,
-                email_id=payload.email_id,
-                thread_id=payload.thread_id,
+                event_type=webhook_payload.event_type,
+                object_data=webhook_payload.object_data,
+                source=webhook_payload.source,
+                email_id=webhook_payload.email_id,
+                thread_id=webhook_payload.thread_id,
                 max_retries=1,
             )
             if not delivered:
                 raise WebhookDeliveryError(
-                    f"Webhook delivery failed; {account.email=}; {payload.event_type=}; {payload.email_id=}; "
-                    f"{payload.thread_id=}"
+                    f"Webhook delivery failed; {account.email=}, {webhook_payload.event_type=}, "
+                    f"{webhook_payload.email_id=}, {webhook_payload.thread_id=}"
                 )
             return
 
@@ -191,4 +192,4 @@ class JobProcessorController:
     @staticmethod
     def _retry_delay_seconds(failure_count: int) -> int:
         # 5s, 10s, 20s, ... with a 5-minute ceiling.
-        return min(300, max(5, 5 * (2 ** (failure_count - 1))))
+        return min(300, max(5, 5 * (2 ** (failure_count - 1))))  # type: ignore

@@ -2,7 +2,9 @@
 Pydantic models for message-related API endpoints.
 """
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class EmailAddress(BaseModel):
@@ -10,6 +12,17 @@ class EmailAddress(BaseModel):
 
     name: str
     email: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_name_to_email(cls, data: Any) -> Any:
+        """Use the email address when a display name is not provided."""
+        if isinstance(data, dict):
+            name = data.get("name")
+            email = data.get("email")
+            if (name is None or (isinstance(name, str) and not name.strip())) and isinstance(email, str):
+                return {**data, "name": email}
+        return data
 
 
 class MessageAttachment(BaseModel):

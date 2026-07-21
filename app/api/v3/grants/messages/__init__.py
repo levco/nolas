@@ -33,8 +33,6 @@ from app.controllers.providers.base import ListMessagesParams
 from app.controllers.providers.exceptions import ProviderError
 from app.controllers.providers.registry import ProviderRegistry
 from app.controllers.smtp.smtp_controller import SMTPInvalidParameterError
-from app.models import Email
-from app.models.account import AccountProvider
 from app.models.app import App
 from app.repos.email import EmailRepo
 
@@ -224,19 +222,6 @@ async def send_message(
             reply_to_message_id=message_data.reply_to_message_id,
             attachments=attachments,
         )
-
-        # Record API-sent messages so incoming notifications don't echo them back.
-        if account.provider in (AccountProvider.google, AccountProvider.microsoft):
-            existing = await email_repo.get_by_account_and_email_id(account.id, result.message_id)
-            if existing is None:
-                await email_repo.add(
-                    Email(
-                        account_id=account.id,
-                        email_id=result.message_id,
-                        thread_id=result.thread_id,
-                        folder="SENT",
-                    )
-                )
 
         response_data = SendMessageData(
             id=result.message_id,

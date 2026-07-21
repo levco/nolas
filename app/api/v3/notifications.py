@@ -96,4 +96,3 @@ async def microsoft_notification(
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
-
