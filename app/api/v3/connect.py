@@ -274,6 +274,7 @@ async def connect_custom(
     """
     Exchange a provider refresh token for a grant (Nylas POST /v3/connect/custom).
     """
+    logger.info(f"Received custom auth request for provider {custom_request.provider} and app {app.name}")
     try:
         provider = AccountProvider(custom_request.provider)
     except ValueError:

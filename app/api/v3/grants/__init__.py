@@ -87,6 +87,7 @@ async def update_grant(
         Provide[ApplicationContainer.controllers.custom_auth_controller]
     ),
 ) -> GrantResponse | JSONResponse:
+    logger.info(f"Received grant update request for grant {grant_id} and app {app.name}")
     account, error_response = await validate_grant_access(app.id, grant_id)
     if error_response:
         return error_response
