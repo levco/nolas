@@ -34,7 +34,7 @@ class CustomAuthController:
         self._subscription_manager = subscription_manager
 
     async def create_grant_from_refresh_token(self, app: App, provider: AccountProvider, refresh_token: str) -> Account:
-        token_payload = await self._token_service.validate_refresh_token(provider, refresh_token)
+        token_payload = await self._token_service.validate_refresh_token(provider, refresh_token, app)
         access_token = token_payload["access_token"]
         # Microsoft rotates refresh tokens on every exchange.
         effective_refresh_token = token_payload.get("refresh_token") or refresh_token
@@ -83,8 +83,10 @@ class CustomAuthController:
 
         return account
 
-    async def update_grant_refresh_token(self, account: Account, refresh_token: str) -> Account:
-        token_payload = await self._token_service.validate_refresh_token(account.provider, refresh_token)
+    async def update_grant_refresh_token(
+        self, account: Account, refresh_token: str, app: App | None = None
+    ) -> Account:
+        token_payload = await self._token_service.validate_refresh_token(account.provider, refresh_token, app)
         effective_refresh_token = token_payload.get("refresh_token") or refresh_token
 
         # The token must belong to this grant's mailbox; otherwise a token for a

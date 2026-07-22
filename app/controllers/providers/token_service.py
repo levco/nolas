@@ -8,6 +8,7 @@ import aiohttp
 from app.controllers.providers.exceptions import ProviderAuthError, ProviderError
 from app.controllers.webhooks.sender import WebhookSender
 from app.models.account import Account, AccountProvider, AccountStatus
+from app.models.app import App
 from app.repos.account import AccountRepo
 from app.utils.password import PasswordUtils
 from settings import settings
@@ -74,7 +75,7 @@ class TokenService:
     async def _refresh_access_token(self, account: Account) -> str:
         refresh_token = PasswordUtils.decrypt_password(account.credentials)
         if account.provider == AccountProvider.google:
-            token_data = await self._refresh_google(refresh_token)
+            token_data = await self._refresh_google(refresh_token, account.app)
         elif account.provider == AccountProvider.microsoft:
             token_data = await self._refresh_microsoft(refresh_token)
         else:
@@ -98,11 +99,17 @@ class TokenService:
         await self._account_repo.update(account, update, do_commit=False)
         return access_token
 
-    async def _refresh_google(self, refresh_token: str) -> dict[str, Any]:
+    async def _refresh_google(self, refresh_token: str, app: App | None = None) -> dict[str, Any]:
         session = await self._get_session()
+        if app and app.gmail_client_id and app.gmail_client_secret:
+            client_id = app.gmail_client_id
+            client_secret = app.gmail_client_secret
+        else:
+            client_id = settings.google.client_id
+            client_secret = settings.google.client_secret
         payload = {
-            "client_id": settings.google.client_id,
-            "client_secret": settings.google.client_secret,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         }
@@ -150,10 +157,12 @@ class TokenService:
             },
         )
 
-    async def validate_refresh_token(self, provider: AccountProvider, refresh_token: str) -> dict[str, Any]:
+    async def validate_refresh_token(
+        self, provider: AccountProvider, refresh_token: str, app: App | None = None
+    ) -> dict[str, Any]:
         """Exchange a refresh token once to validate it. Returns the token payload."""
         if provider == AccountProvider.google:
-            return await self._refresh_google(refresh_token)
+            return await self._refresh_google(refresh_token, app)
         if provider == AccountProvider.microsoft:
             return await self._refresh_microsoft(refresh_token)
         raise ProviderError(f"Refresh-token validation not supported for provider {provider.value}")

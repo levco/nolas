@@ -16,3 +16,5 @@ class App(Base, WithUUID, TimestampMixin):
     grant_webhook_url: Mapped[str | None] = mapped_column(
         sa.String(255), nullable=True, comment="Destination for grant.* lifecycle events; falls back to webhook_url"
     )
+    gmail_client_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    gmail_client_secret: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)

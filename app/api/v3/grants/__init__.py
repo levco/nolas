@@ -108,7 +108,7 @@ async def update_grant(
 
     try:
         account = await custom_auth_controller.update_grant_refresh_token(
-            account, update_request.settings.refresh_token
+            account, update_request.settings.refresh_token, app
         )
         return GrantResponse(request_id=str(uuid.uuid4()), data=_grant_data(account))
     except ProviderError as e:
@@ -131,7 +131,9 @@ async def update_grant(
         500: {"model": APIError, "description": "Internal server error"},
     },
     summary="Delete a grant",
-    description="Deletes a grant by setting the account status to inactive and removing all associated uid_tracking records",
+    description=(
+        "Deletes a grant by setting the account status to inactive and removing all associated uid_tracking records"
+    ),
 )
 @inject
 async def delete_grant(
