@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,7 @@ def _token_service() -> TokenService:
 
 
 @pytest.mark.asyncio
-async def test_google_refresh_uses_app_credentials() -> None:
+async def test_google_refresh_uses_app_credentials(caplog: pytest.LogCaptureFixture) -> None:
     service = _token_service()
     session = MagicMock()
     response = AsyncMock()
@@ -19,9 +20,15 @@ async def test_google_refresh_uses_app_credentials() -> None:
     response.json.return_value = {"access_token": "access-token"}
     session.post.return_value.__aenter__.return_value = response
     service._get_session = AsyncMock(return_value=session)  # type: ignore[method-assign]
-    app = SimpleNamespace(gmail_client_id="app-client", gmail_client_secret="app-secret")
+    app = SimpleNamespace(
+        id=7,
+        uuid="app-uuid",
+        gmail_client_id="app-client",
+        gmail_client_secret="app-secret",
+    )
 
-    result = await service._refresh_google("refresh-token", app)  # type: ignore[arg-type]
+    with caplog.at_level(logging.INFO):
+        result = await service._refresh_google("refresh-token", app)  # type: ignore[arg-type]
 
     assert result == {"access_token": "access-token"}
     session.post.assert_called_once_with(
@@ -33,10 +40,15 @@ async def test_google_refresh_uses_app_credentials() -> None:
             "grant_type": "refresh_token",
         },
     )
+    assert "Using app-specific Gmail OAuth credentials" in caplog.text
+    assert "app_id=7" in caplog.text
+    assert "app_uuid=app-uuid" in caplog.text
+    assert "client_id=app-client" in caplog.text
+    assert "app-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_google_refresh_falls_back_to_global_credentials() -> None:
+async def test_google_refresh_falls_back_to_global_credentials(caplog: pytest.LogCaptureFixture) -> None:
     service = _token_service()
     session = MagicMock()
     response = AsyncMock()
@@ -44,7 +56,12 @@ async def test_google_refresh_falls_back_to_global_credentials() -> None:
     response.json.return_value = {"access_token": "access-token"}
     session.post.return_value.__aenter__.return_value = response
     service._get_session = AsyncMock(return_value=session)  # type: ignore[method-assign]
-    app = SimpleNamespace(gmail_client_id="incomplete-app-client", gmail_client_secret=None)
+    app = SimpleNamespace(
+        id=7,
+        uuid="app-uuid",
+        gmail_client_id="incomplete-app-client",
+        gmail_client_secret=None,
+    )
 
     with patch("app.controllers.providers.token_service.settings.google.client_id", "global-client"), patch(
         "app.controllers.providers.token_service.settings.google.client_secret", "global-secret"
@@ -53,3 +70,6 @@ async def test_google_refresh_falls_back_to_global_credentials() -> None:
 
     assert session.post.call_args.kwargs["data"]["client_id"] == "global-client"
     assert session.post.call_args.kwargs["data"]["client_secret"] == "global-secret"
+    assert "App-specific Gmail OAuth credentials are incomplete" in caplog.text
+    assert "has_client_id=True" in caplog.text
+    assert "has_client_secret=False" in caplog.text

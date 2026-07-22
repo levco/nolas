@@ -104,7 +104,22 @@ class TokenService:
         if app and app.gmail_client_id and app.gmail_client_secret:
             client_id = app.gmail_client_id
             client_secret = app.gmail_client_secret
+            logger.info(
+                "Using app-specific Gmail OAuth credentials; app_id=%s, app_uuid=%s, client_id=%s",
+                app.id,
+                app.uuid,
+                client_id,
+            )
         else:
+            if app and (app.gmail_client_id or app.gmail_client_secret):
+                logger.warning(
+                    "App-specific Gmail OAuth credentials are incomplete; falling back to global credentials; "
+                    "app_id=%s, app_uuid=%s, has_client_id=%s, has_client_secret=%s",
+                    app.id,
+                    app.uuid,
+                    bool(app.gmail_client_id),
+                    bool(app.gmail_client_secret),
+                )
             client_id = settings.google.client_id
             client_secret = settings.google.client_secret
         payload = {
