@@ -20,7 +20,11 @@ from app.controllers.providers.base import (
     ProviderClient,
     ProviderSendResult,
 )
-from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError
+from app.controllers.providers.exceptions import (
+    ProviderError,
+    ProviderNotFoundError,
+    ProviderRateLimitError,
+)
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.microsoft.mapper import (
     graph_folder_name,
@@ -58,6 +62,7 @@ ATTACHMENT_SELECT_FIELDS = "id,name,contentType,size,isInline"
 # Attachments above this size use a Graph upload session instead of inline contentBytes.
 LARGE_ATTACHMENT_THRESHOLD = 3 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+GRAPH_BATCH_SIZE = 20
 
 # Graph caps mail subscriptions at 10080 minutes (7 days); renew comfortably earlier.
 SUBSCRIPTION_LIFETIME = timedelta(days=6)
@@ -89,6 +94,89 @@ class GraphClient(ProviderClient):
         except ProviderNotFoundError:
             return None
         return map_graph_message(raw, account.uuid, include_headers=include_headers)
+
+    async def update_message_unread(self, account: Account, message_id: str, unread: bool) -> Message | None:
+        message = await self.get_message(account, message_id)
+        if message is None:
+            return None
+
+        if unread:
+            await self._http.request(
+                account,
+                "PATCH",
+                f"{GRAPH_API_BASE}/me/messages/{message_id}",
+                json_body={"isRead": False},
+                headers=IMMUTABLE_ID_HEADER,
+                expect_json=False,
+            )
+        else:
+            unread_ids = await self._list_unread_message_ids(account, message.thread_id)
+            await self._mark_messages_read(account, unread_ids)
+
+        message.unread = unread
+        return message
+
+    async def _list_unread_message_ids(self, account: Account, thread_id: str) -> list[str]:
+        escaped_thread_id = thread_id.replace("'", "''")
+        response = await self._http.request(
+            account,
+            "GET",
+            f"{GRAPH_API_BASE}/me/messages",
+            params={
+                "$top": 100,
+                "$select": "id",
+                "$filter": (f"conversationId eq '{escaped_thread_id}' and isRead eq false and isDraft eq false"),
+            },
+            headers=IMMUTABLE_ID_HEADER,
+        )
+
+        message_ids: list[str] = []
+        while True:
+            message_ids.extend(raw["id"] for raw in response.get("value", []) if raw.get("id"))
+            next_link = response.get("@odata.nextLink")
+            if not next_link:
+                return message_ids
+            response = await self._http.request(
+                account,
+                "GET",
+                next_link,
+                headers=IMMUTABLE_ID_HEADER,
+            )
+
+    async def _mark_messages_read(self, account: Account, message_ids: list[str]) -> None:
+        for start in range(0, len(message_ids), GRAPH_BATCH_SIZE):
+            batch_ids = message_ids[start : start + GRAPH_BATCH_SIZE]
+            response = await self._http.request(
+                account,
+                "POST",
+                f"{GRAPH_API_BASE}/$batch",
+                json_body={
+                    "requests": [
+                        {
+                            "id": str(index),
+                            "method": "PATCH",
+                            "url": f"/me/messages/{batch_message_id}",
+                            "headers": {"Content-Type": "application/json"},
+                            "body": {"isRead": True},
+                        }
+                        for index, batch_message_id in enumerate(batch_ids)
+                    ]
+                },
+                headers=IMMUTABLE_ID_HEADER,
+            )
+            subresponses = response.get("responses", [])
+            if len(subresponses) != len(batch_ids):
+                raise ProviderError("Microsoft Graph returned an incomplete batch update response.")
+            for subresponse in subresponses:
+                status_code = int(subresponse.get("status", 500))
+                if 200 <= status_code < 300 or status_code == 404:
+                    continue
+                if status_code == 429:
+                    raise ProviderRateLimitError("Microsoft Graph batch update was rate limited.")
+                raise ProviderError(
+                    f"Microsoft Graph batch update failed ({status_code}).",
+                    status_code=status_code,
+                )
 
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
         if params.page_token:
@@ -133,11 +221,12 @@ class GraphClient(ProviderClient):
             subject=params.subject,
             received_after=params.latest_message_after,
             received_before=params.latest_message_before,
+            unread=params.unread,
             search_query_native=params.search_query_native,
         )
         response = await self._list_thread_messages_raw(account, message_params)
         messages = self._build_thread_messages(account, response)
-        threads = build_threads_from_messages(messages)
+        threads = build_threads_from_messages(messages, unread_from_latest=True)
         filtered = filter_threads(threads, messages, params)
         next_link = response.get("@odata.nextLink")
         return ListThreadsResult(
@@ -150,7 +239,7 @@ class GraphClient(ProviderClient):
         messages = self._build_thread_messages(account, response)
         if not messages:
             return None
-        threads = build_threads_from_messages(messages)
+        threads = build_threads_from_messages(messages, unread_from_latest=True)
         return threads[0] if threads else None
 
     def _build_list_result(
@@ -166,7 +255,7 @@ class GraphClient(ProviderClient):
 
     async def _list_thread_messages_raw(self, account: Account, params: ListMessagesParams) -> dict[str, Any]:
         if params.page_token:
-            return await self._http.request(
+            return await self._http.request(  # type: ignore
                 account, "GET", decode_cursor(params.page_token), headers=IMMUTABLE_ID_HEADER
             )
 
@@ -177,17 +266,18 @@ class GraphClient(ProviderClient):
 
         search = build_graph_search(params)
         if search:
-            # $search cannot be combined with $filter/$orderby.
+            # $search cannot be combined with $filter/$orderby. Graph returns
+            # message search results newest-first by received date.
             query["$search"] = f'"{search}"'
         else:
             graph_filter = build_graph_filter(params)
             if graph_filter:
-                query["$filter"] = graph_filter
-            if not params.search_query_native:
-                if params.received_after is not None or params.received_before is not None:
-                    query["$orderby"] = "receivedDateTime desc"
+                # Graph requires a property used by $orderby to also appear in
+                # $filter, before any other filtered properties.
+                query["$filter"] = f"receivedDateTime ne null and {graph_filter}"
+            query["$orderby"] = "receivedDateTime desc"
 
-        return await self._http.request(
+        return await self._http.request(  # type: ignore
             account, "GET", f"{GRAPH_API_BASE}/me/messages", params=query, headers=IMMUTABLE_ID_HEADER
         )
 

@@ -28,6 +28,10 @@ class TestBuildGraphFilter:
         result = build_graph_filter(ListMessagesParams(subject="John's deal"))
         assert "subject eq 'John''s deal'" in result
 
+    def test_unread(self) -> None:
+        assert "isRead eq false" in build_graph_filter(ListMessagesParams(unread=True))
+        assert "isRead eq true" in build_graph_filter(ListMessagesParams(unread=False))
+
     def test_native_query_passthrough(self) -> None:
         native = "conversationId eq 'X' and receivedDateTime ge 2024-01-01T00:00:00Z"
         assert build_graph_filter(ListMessagesParams(search_query_native=native)) == native

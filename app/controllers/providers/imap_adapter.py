@@ -16,6 +16,7 @@ from app.controllers.providers.base import (
     ProviderClient,
     ProviderSendResult,
 )
+from app.controllers.providers.exceptions import ProviderError
 from app.controllers.providers.threads import build_threads_from_messages, filter_threads
 from app.models.account import Account
 from app.utils.message_utils import MessageUtils
@@ -40,6 +41,58 @@ class ImapProviderAdapter(ProviderClient):
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
         result = await self._email_controller.get_message_by_id(account, message_id)
         return result.message if result else None
+
+    async def update_message_unread(self, account: Account, message_id: str, unread: bool) -> Message | None:
+        result = await self._email_controller.get_message_by_id(account, message_id)
+        if result is None:
+            return None
+
+        message = result.message
+        if unread:
+            folder = message.folders[0]
+            connection = await self._connection_manager.get_connection_or_fail(account, folder)
+            try:
+                message_uid = result.uid
+                if message_uid is None:
+                    search_result = await connection.search(
+                        f'HEADER Message-ID "{MessageUtils.format_message_id(message.id)}"'
+                    )
+                    message_ids = self._parse_search_ids(search_result)
+                    message_uid = int(message_ids[0]) if message_ids else None
+                if message_uid is None:
+                    raise ProviderError("Could not resolve the IMAP message sequence number.")
+                await connection.store(str(message_uid), "-FLAGS", r"(\Seen)")
+            finally:
+                await self._connection_manager.close_connection(connection, account)
+        else:
+            thread_id = MessageUtils.format_message_id(message.thread_id)
+            folders = await FolderUtils.get_account_folders(self._connection_manager, account)
+            for folder in folders:
+                connection = None
+                try:
+                    connection = await self._connection_manager.get_connection_or_fail(account, folder)
+                    matching_ids: set[str] = set()
+                    for criterion in (
+                        f'UNSEEN HEADER References "{thread_id}"',
+                        f'UNSEEN HEADER Message-ID "{thread_id}"',
+                    ):
+                        matching_ids.update(self._parse_search_ids(await connection.search(criterion)))
+                    if matching_ids:
+                        await connection.store(",".join(sorted(matching_ids, key=int)), "+FLAGS", r"(\Seen)")
+                finally:
+                    if connection:
+                        await self._connection_manager.close_connection(connection, account)
+
+        message.unread = unread
+        return message
+
+    @staticmethod
+    def _parse_search_ids(search_result: object) -> list[str]:
+        if not search_result or not search_result[1] or not search_result[1][0]:  # type: ignore[index]
+            return []
+        raw_ids = search_result[1][0]  # type: ignore[index]
+        decoded = raw_ids.decode() if isinstance(raw_ids, bytes) else str(raw_ids)
+        return [message_id for message_id in decoded.split() if message_id.isdigit()]
 
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
         criteria = self._build_search_criteria(params)

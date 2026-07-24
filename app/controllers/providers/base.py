@@ -24,6 +24,7 @@ class ListMessagesParams:
     subject: str | None = None
     received_after: int | None = None
     received_before: int | None = None
+    unread: bool | None = None
     include_headers: bool = False
     # Provider-native query (Microsoft Graph $filter / Gmail q) passed through verbatim.
     search_query_native: str | None = None
@@ -90,6 +91,10 @@ class ProviderClient(ABC):
 
     @abstractmethod
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_message_unread(self, account: Account, message_id: str, unread: bool) -> Message | None:
         raise NotImplementedError
 
     @abstractmethod

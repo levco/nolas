@@ -1,6 +1,6 @@
 import pytest
 
-from app.api.payloads.messages import SendMessageRequest
+from app.api.payloads.messages import SendMessageRequest, UpdateMessageRequest
 
 
 @pytest.mark.parametrize("name", [None, "", "   "])
@@ -28,3 +28,8 @@ def test_send_message_defaults_missing_recipient_name_to_email() -> None:
     )
 
     assert request.to[0].name == "to@example.com"
+
+
+@pytest.mark.parametrize(("unread", "expected"), [(True, True), (False, False)])
+def test_update_message_accepts_unread(unread: bool, expected: bool) -> None:
+    assert UpdateMessageRequest(unread=unread).unread is expected

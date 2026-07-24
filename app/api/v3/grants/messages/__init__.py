@@ -22,6 +22,7 @@ from app.api.payloads.messages import (
     SendMessageData,
     SendMessageRequest,
     SendMessageResponse,
+    UpdateMessageRequest,
 )
 from app.api.utils.errors import (
     create_error_response,
@@ -94,6 +95,59 @@ async def get_message(
             provider_error={
                 "code": "InternalError",
                 "message": "An unexpected error occurred when fetching the message",
+            },
+        )
+
+
+@router.put(
+    "/{message_id}",
+    response_model=MessageResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": APIError, "description": "Invalid grant"},
+        404: {"model": APIError, "description": "Message not found"},
+        500: {"model": APIError, "description": "Internal server error"},
+    },
+    summary="Update a message",
+    description=(
+        "Updates a message's read state. Marking a message read also marks every unread message "
+        "in the same thread read."
+    ),
+)
+@inject
+async def update_message(
+    update_request: UpdateMessageRequest,
+    grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
+    message_id: str = Path(..., example="1234567890"),
+    app: App = Depends(get_current_app),
+    registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
+) -> MessageResponse | JSONResponse:
+    account, error_response = await validate_grant_access(app.id, grant_id)
+    if error_response:
+        return error_response
+    assert account is not None
+
+    try:
+        message = await registry.get_client(account).update_message_unread(account, message_id, update_request.unread)
+        if message is None:
+            return create_error_response(
+                error_type="not_found_error",
+                message="requested object not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                provider_error={"code": "NotFoundError", "message": "Requested object not found"},
+            )
+        return MessageResponse(request_id=str(uuid.uuid4()), data=message)
+    except ProviderError as e:
+        return provider_error_response(e)
+    except Exception:
+        logger.exception(f"Failed to update message {message_id}")
+        return create_error_response(
+            error_type="provider_error",
+            message="Failed to update message",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            provider_error={
+                "code": "InternalError",
+                "message": "An unexpected error occurred when updating the message",
             },
         )
 

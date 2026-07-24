@@ -5,7 +5,7 @@ from app.api.payloads.threads import Thread
 from app.controllers.providers.base import ListThreadsParams
 
 
-def build_threads_from_messages(messages: list[Message]) -> list[Thread]:
+def build_threads_from_messages(messages: list[Message], *, unread_from_latest: bool = False) -> list[Thread]:
     grouped: dict[str, list[Message]] = defaultdict(list)
     for message in messages:
         grouped[message.thread_id].append(message)
@@ -40,7 +40,11 @@ def build_threads_from_messages(messages: list[Message]) -> list[Thread]:
                 latest_draft_or_message=latest,
                 has_attachments=any(bool(message.attachments) for message in ordered),
                 starred=any(message.starred for message in ordered),
-                unread=any(message.unread for message in ordered),
+                # Gmail can filter threads natively by whether any message is
+                # unread. Outlook exposes item-level state, where using the
+                # newest message matches its conversation UI without another
+                # provider request per thread.
+                unread=latest.unread if unread_from_latest else any(message.unread for message in ordered),
                 latest_message_received_date=latest.date,
                 earliest_message_date=earliest.date,
             )

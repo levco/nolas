@@ -106,6 +106,12 @@ class MessageListResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class UpdateMessageRequest(BaseModel):
+    """Fields supported by the message update endpoint."""
+
+    unread: bool
+
+
 class SendMessageData(BaseMessage):
     """Send message model."""
 

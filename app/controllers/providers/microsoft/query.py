@@ -28,6 +28,8 @@ def build_graph_filter(params: ListMessagesParams) -> str | None:
     if params.subject:
         escaped = params.subject.replace("'", "''")
         clauses.append(f"subject eq '{escaped}'")
+    if params.unread is not None:
+        clauses.append(f"isRead eq {'false' if params.unread else 'true'}")
     if params.received_after is not None:
         clauses.append(f"receivedDateTime ge {_iso(params.received_after)}")
     if params.received_before is not None:

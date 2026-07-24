@@ -270,6 +270,38 @@ class TestGmailClientThreads:
         assert result.threads[0].earliest_message_date == 1717920000
         assert result.threads[0].has_attachments is True
         assert result.threads[0].starred is True
+        # Gmail provides an efficient native any-message unread thread filter.
         assert result.threads[0].unread is True
         assert result.threads[0].message_ids == ["m2", "m1"]
         assert result.threads[0].latest_draft_or_message.id == "m2"
+
+
+class TestGmailClientUpdateUnread:
+    def test_marks_whole_thread_read(self) -> None:
+        raw = _raw_thread_message("m1", "t1", unread=True)
+        http = SimpleNamespace(request=AsyncMock(side_effect=[raw, {"id": "t1"}]))
+        client = GmailClient(http)
+
+        message = asyncio.run(client.update_message_unread(_account(), "m1", unread=False))
+
+        assert message is not None
+        assert message.unread is False
+        modify_call = http.request.await_args_list[1]
+        assert modify_call.args[1:] == ("POST", "https://gmail.googleapis.com/gmail/v1/users/me/threads/t1/modify")
+        assert modify_call.kwargs["json_body"] == {"removeLabelIds": ["UNREAD"]}
+
+    def test_marks_only_requested_message_unread(self) -> None:
+        raw = _raw_thread_message("m1", "t1", unread=False)
+        http = SimpleNamespace(request=AsyncMock(side_effect=[raw, {"id": "m1"}]))
+        client = GmailClient(http)
+
+        message = asyncio.run(client.update_message_unread(_account(), "m1", unread=True))
+
+        assert message is not None
+        assert message.unread is True
+        modify_call = http.request.await_args_list[1]
+        assert modify_call.args[1:] == (
+            "POST",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/m1/modify",
+        )
+        assert modify_call.kwargs["json_body"] == {"addLabelIds": ["UNREAD"]}

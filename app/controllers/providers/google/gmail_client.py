@@ -75,6 +75,31 @@ class GmailClient(ProviderClient):
             return None
         return map_gmail_message(raw, account.uuid, include_headers=include_headers)
 
+    async def update_message_unread(self, account: Account, message_id: str, unread: bool) -> Message | None:
+        message = await self.get_message(account, message_id)
+        if message is None:
+            return None
+
+        if unread:
+            await self._http.request(
+                account,
+                "POST",
+                f"{GMAIL_API_BASE}/messages/{message_id}/modify",
+                json_body={"addLabelIds": ["UNREAD"]},
+            )
+        else:
+            # Gmail exposes a native thread mutation, so clearing UNREAD does
+            # not require fetching and updating every sibling individually.
+            await self._http.request(
+                account,
+                "POST",
+                f"{GMAIL_API_BASE}/threads/{message.thread_id}/modify",
+                json_body={"removeLabelIds": ["UNREAD"]},
+            )
+
+        message.unread = unread
+        return message
+
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
         if params.thread_id:
             return await self._list_thread_messages(account, params)
