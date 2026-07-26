@@ -116,6 +116,18 @@ def _batch_response(parts: list[str], boundary: str = "batch_response") -> bytes
     return "".join(segments).encode()
 
 
+def test_list_history_requests_all_change_types() -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"history": []}))
+    client = GmailClient(http)
+
+    asyncio.run(client.list_history(_account(), "123", page_token="next"))
+
+    assert http.request.await_args.kwargs["params"] == {
+        "startHistoryId": "123",
+        "pageToken": "next",
+    }
+
+
 class TestGmailClientBatchHydration:
     def test_hydrates_messages_via_batch_and_preserves_listing_order(self) -> None:
         http = SimpleNamespace(request=AsyncMock())

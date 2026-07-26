@@ -16,6 +16,20 @@ sys.modules.setdefault("app.controllers.providers.http", http_module)
 from app.controllers.providers.microsoft.graph_client import GraphClient  # noqa: E402
 
 
+def test_create_subscription_includes_updates_and_immutable_ids() -> None:
+    http = SimpleNamespace(
+        request=AsyncMock(return_value={"id": "subscription-1", "expirationDateTime": "2026-07-30T12:00:00Z"})
+    )
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    asyncio.run(client.create_subscription(account, "https://example.com/notifications", "secret"))
+
+    request = http.request.await_args
+    assert request.kwargs["json_body"]["changeType"] == "created,updated"
+    assert request.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId"'}
+
+
 def test_list_threads_requests_newest_messages_first() -> None:
     http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
     client = GraphClient(http)

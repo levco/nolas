@@ -22,7 +22,7 @@ MAX_HISTORY_PAGES = 20
 
 
 class IncomingNotificationController:
-    """Turns Gmail Pub/Sub pushes and Graph change notifications into message.created webhooks."""
+    """Turns provider notifications into Nylas-shaped message webhooks."""
 
     def __init__(
         self,
@@ -77,7 +77,8 @@ class IncomingNotificationController:
             await self._account_repo.update(account, {"provider_context": context}, do_commit=False)
             return
 
-        message_ids: list[str] = []
+        created_message_ids: dict[str, None] = {}
+        updated_message_ids: dict[str, None] = {}
         page_token: str | None = None
         latest_history_id = str(notified_history_id)
         last_entry_id: str | None = None
@@ -95,7 +96,15 @@ class IncomingNotificationController:
                         if "DRAFT" in labels:
                             continue
                         if message.get("id"):
-                            message_ids.append(message["id"])
+                            created_message_ids[message["id"]] = None
+                    for field in ("labelsAdded", "labelsRemoved"):
+                        for changed in entry.get(field, []):
+                            message = changed.get("message", {})
+                            labels = message.get("labelIds", [])
+                            if "DRAFT" in labels:
+                                continue
+                            if message.get("id"):
+                                updated_message_ids[message["id"]] = None
                 page_token = history.get("nextPageToken")
                 if not page_token:
                     exhausted = True
@@ -108,10 +117,25 @@ class IncomingNotificationController:
             logger.warning(f"Gmail history expired for {account.email}; cursor reset")
             return
 
-        if message_ids:
-            logger.info(f"Processing Gmail messages; email={account.email}, ids={message_ids}")
-        for message_id in dict.fromkeys(message_ids):
-            await self._emit_message_created(account, message_id, provider=AccountProvider.google)
+        # A newly-added message can also have label records in the same history
+        # window. Emit one event with its latest state, with message.created taking
+        # precedence over message.updated.
+        for message_id in created_message_ids:
+            updated_message_ids.pop(message_id, None)
+
+        if created_message_ids or updated_message_ids:
+            logger.info(
+                f"Processing Gmail changes; email={account.email}, "
+                f"created={list(created_message_ids)}, updated={list(updated_message_ids)}"
+            )
+        for message_id in created_message_ids:
+            await self._emit_message_event(
+                account, message_id, provider=AccountProvider.google, event_type="message.created"
+            )
+        for message_id in updated_message_ids:
+            await self._emit_message_event(
+                account, message_id, provider=AccountProvider.google, event_type="message.updated"
+            )
 
         # If the page cap stopped us early, only advance the cursor to the last entry we
         # actually processed — advancing to the mailbox-latest id would drop the tail.
@@ -147,8 +171,19 @@ class IncomingNotificationController:
             logger.warning(f"clientState mismatch for Graph subscription {subscription_id}; dropping")
             return
 
+        change_type = notification.get("changeType")
+        event_type = {
+            "created": "message.created",
+            "updated": "message.updated",
+        }.get(change_type if isinstance(change_type, str) else "")
+        if event_type is None:
+            logger.debug(f"Ignoring unsupported Graph message change type: {change_type}")
+            return
+
         try:
-            await self._emit_message_created(account, message_id, provider=AccountProvider.microsoft)
+            await self._emit_message_event(
+                account, message_id, provider=AccountProvider.microsoft, event_type=event_type
+            )
         except ProviderAuthError:
             logger.warning(f"Auth failure processing Graph notification for {account.email}")
         except Exception:
@@ -156,7 +191,13 @@ class IncomingNotificationController:
 
     # --- Shared ---
 
-    async def _emit_message_created(self, account: Account, message_id: str, provider: AccountProvider) -> None:
+    async def _emit_message_event(
+        self,
+        account: Account,
+        message_id: str,
+        provider: AccountProvider,
+        event_type: str,
+    ) -> None:
         client = self._gmail if provider == AccountProvider.google else self._graph
         try:
             message = await client.get_message(account, message_id, include_headers=True)
@@ -174,7 +215,7 @@ class IncomingNotificationController:
             JobType.webhook_delivery,
             {
                 "account_id": account.id,
-                "event_type": "message.created",
+                "event_type": event_type,
                 "source": "nolas",
                 "object_data": message.model_dump(by_alias=True),
                 "email_id": message.id,
@@ -183,7 +224,8 @@ class IncomingNotificationController:
             max_attempts=10,
         )
 
-        bounce = detect_bounce(message)
+        # Read-state, label, and folder updates must not re-emit bounce events.
+        bounce = detect_bounce(message) if event_type == "message.created" else None
         if bounce:
             try:
                 await self._job_repo.enqueue(

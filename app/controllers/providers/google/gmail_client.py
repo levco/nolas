@@ -293,7 +293,9 @@ class GmailClient(ProviderClient):
     async def list_history(
         self, account: Account, start_history_id: str, page_token: str | None = None
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {"startHistoryId": start_history_id, "historyTypes": "messageAdded"}
+        # Do not restrict historyTypes here: message.updated notifications depend
+        # on labelAdded/labelRemoved records (including Gmail's UNREAD label).
+        params: dict[str, Any] = {"startHistoryId": start_history_id}
         if page_token:
             params["pageToken"] = page_token
         return dict(await self._http.request(account, "GET", f"{GMAIL_API_BASE}/history", params=params))

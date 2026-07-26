@@ -508,12 +508,13 @@ class GraphClient(ProviderClient):
                 "POST",
                 f"{GRAPH_API_BASE}/subscriptions",
                 json_body={
-                    "changeType": "created",
+                    "changeType": "created,updated",
                     "notificationUrl": notification_url,
                     "resource": "/me/messages",
                     "expirationDateTime": expiration,
                     "clientState": client_state,
                 },
+                headers=IMMUTABLE_ID_HEADER,
             )
         )
 
