@@ -388,32 +388,40 @@ class GraphClient(ProviderClient):
 
     async def _add_attachment(self, account: Account, draft_id: str, attachment: AttachmentData) -> None:
         if len(attachment.data) <= LARGE_ATTACHMENT_THRESHOLD:
+            body: dict[str, Any] = {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": attachment.filename,
+                "contentType": attachment.content_type,
+                "contentBytes": base64.b64encode(attachment.data).decode(),
+            }
+            if attachment.is_inline:
+                body["isInline"] = True
+            if attachment.content_id:
+                body["contentId"] = attachment.content_id
             await self._http.request(
                 account,
                 "POST",
                 f"{GRAPH_API_BASE}/me/messages/{draft_id}/attachments",
-                json_body={
-                    "@odata.type": "#microsoft.graph.fileAttachment",
-                    "name": attachment.filename,
-                    "contentType": attachment.content_type,
-                    "contentBytes": base64.b64encode(attachment.data).decode(),
-                },
+                json_body=body,
                 headers=IMMUTABLE_ID_HEADER,
             )
             return
 
+        attachment_item: dict[str, Any] = {
+            "attachmentType": "file",
+            "name": attachment.filename,
+            "contentType": attachment.content_type,
+            "size": len(attachment.data),
+        }
+        if attachment.is_inline:
+            attachment_item["isInline"] = True
+        if attachment.content_id:
+            attachment_item["contentId"] = attachment.content_id
         session = await self._http.request(
             account,
             "POST",
             f"{GRAPH_API_BASE}/me/messages/{draft_id}/attachments/createUploadSession",
-            json_body={
-                "AttachmentItem": {
-                    "attachmentType": "file",
-                    "name": attachment.filename,
-                    "contentType": attachment.content_type,
-                    "size": len(attachment.data),
-                }
-            },
+            json_body={"AttachmentItem": attachment_item},
             headers=IMMUTABLE_ID_HEADER,
         )
         upload_url = session.get("uploadUrl")

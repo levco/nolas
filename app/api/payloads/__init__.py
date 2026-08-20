@@ -10,6 +10,7 @@ from .messages import (
     MessageAttachment,
     MessageListResponse,
     MessageResponse,
+    SendMessageAttachment,
     SendMessageRequest,
     SendMessageResponse,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "MessageAttachment",
     "MessageListResponse",
     "MessageResponse",
+    "SendMessageAttachment",
     "SendMessageRequest",
     "SendMessageResponse",
 ]

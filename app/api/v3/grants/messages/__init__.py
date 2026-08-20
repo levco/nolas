@@ -4,7 +4,7 @@ Messages API router - Sub-router for message endpoints under grants.
 
 import json
 import logging
-import mimetypes
+import re
 import uuid
 from typing import Any
 
@@ -261,7 +261,7 @@ async def send_message(
         else:
             body = await request.body()
             message_data = SendMessageRequest.model_validate_json(body)
-            attachments = []
+            attachments = [attachment.to_attachment_data() for attachment in message_data.attachments or []]
 
         sender = message_data.from_ or [EmailAddress(name=account.email, email=account.email)]
         result = await registry.get_client(account).send_message(
@@ -315,44 +315,62 @@ async def send_message(
         )
 
 
+_GENERATED_ATTACHMENT_FIELD_NAME = re.compile(r"file\d+")
+_MESSAGE_FIELD_NAMES = ("message", "Message")
+
+
 async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest, list[AttachmentData]]:
     """
     Parse multipart form data request to extract message and attachments.
 
-    Expected format:
-    - "Message" field: JSON string with message data
-    - "Attachment" fields: File uploads
+    Supports the official Nylas Python SDK's multipart format (used for attachments whose total
+    size is 3MB or more):
+    - "message" field (lowercase): JSON string with message data, sent as an application/json part
+      with no filename.
+    - every other field is an attachment. The SDK names each attachment field
+      `attachment.get("content_id", f"file{index}")`, so a field name that isn't the generated
+      `file{N}` placeholder is threaded through as that attachment's content_id (implying it's
+      inline); otherwise it's a regular, non-inline attachment.
+
+    Falls back to "Message" (capital M) for the envelope field for backward compatibility with any
+    other existing caller still using that old, hand-rolled format; a repeated "Attachment" field
+    from that same old format is treated as a non-inline attachment like any other unrecognized
+    field name.
     """
     attachments: list[AttachmentData] = []
     message_json: dict[str, Any] | None = None
 
     form = await request.form()
     for field_name, field_value in form.multi_items():
-        if field_name == "Message":
-            # Parse the JSON message data
+        if field_name in _MESSAGE_FIELD_NAMES and message_json is None:
             if isinstance(field_value, str):
                 message_json = json.loads(field_value)
             else:
-                raise ValueError("Message field must be a JSON string")
-        elif field_name == "Attachment":
-            # Handle attachment
-            if hasattr(field_value, "filename") and hasattr(field_value, "read"):
-                # It's an UploadFile
-                file_content = await field_value.read()
-                filename = field_value.filename or "unknown"
+                raise ValueError(f"'{field_name}' field must be a JSON string")
+            continue
 
-                # Determine content type based on filename extension
-                content_type, _ = mimetypes.guess_type(filename)
-                if content_type is None:
-                    content_type = "application/octet-stream"
+        if not (hasattr(field_value, "filename") and hasattr(field_value, "read")):
+            continue
 
-                attachment = AttachmentData(filename=filename, content_type=content_type, data=file_content)
-                attachments.append(attachment)
+        filename = field_value.filename or "unknown"
+        content_type = getattr(field_value, "content_type", None) or "application/octet-stream"
+        content = await field_value.read()
+
+        is_content_id = field_name != "Attachment" and not _GENERATED_ATTACHMENT_FIELD_NAME.fullmatch(field_name)
+        attachments.append(
+            AttachmentData(
+                filename=filename,
+                content_type=content_type,
+                data=content,
+                content_id=field_name if is_content_id else None,
+                content_disposition="inline" if is_content_id else None,
+                is_inline=is_content_id,
+            )
+        )
 
     if message_json is None:
-        raise ValueError("Missing 'Message' field in multipart request")
+        raise ValueError("Missing 'message' field in multipart request")
 
-    # Parse the message data
     message_data = SendMessageRequest.model_validate(message_json)
 
     return message_data, attachments

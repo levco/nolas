@@ -1,5 +1,6 @@
 from email import policy
 from email.mime.application import MIMEApplication
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
@@ -52,6 +53,9 @@ def build_email_message(
     sender_domain: str | None = None,
 ) -> tuple[MIMEMultipart, str]:
     """Build an RFC822 email message. Returns (message, message_id_header)."""
+    # ponytail: container stays multipart/mixed even with inline (cid) images rather than nesting
+    # a multipart/related part. Every major client (Gmail, Outlook, Apple Mail) still resolves
+    # Content-ID references under mixed; switch to related if a client in the wild doesn't.
     container_subtype = "mixed" if attachments else "alternative"
     message = MIMEMultipart(container_subtype, policy=policy.default)
     message["Subject"] = subject
@@ -81,12 +85,25 @@ def build_email_message(
         alternative.attach(html_part)
         message.attach(alternative)
         for attachment in attachments:
-            _, _, subtype = (attachment.content_type or "application/octet-stream").partition("/")
-            part = MIMEApplication(
-                attachment.data, _subtype=subtype or "octet-stream", policy=policy.default  # type: ignore[arg-type]
-            )
-            part.replace_header("Content-Type", attachment.content_type or "application/octet-stream")
-            part.add_header("Content-Disposition", "attachment", filename=attachment.filename)
+            content_type = attachment.content_type or "application/octet-stream"
+            maintype, _, subtype = content_type.partition("/")
+            part: MIMEImage | MIMEApplication
+            if attachment.is_inline and maintype == "image":
+                part = MIMEImage(
+                    attachment.data, _subtype=subtype or "octet-stream", policy=policy.default  # type: ignore[arg-type]
+                )
+            else:
+                part = MIMEApplication(
+                    attachment.data, _subtype=subtype or "octet-stream", policy=policy.default  # type: ignore[arg-type]
+                )
+            part.replace_header("Content-Type", content_type)
+            disposition = attachment.content_disposition or ("inline" if attachment.is_inline else "attachment")
+            part.add_header("Content-Disposition", disposition, filename=attachment.filename)
+            if attachment.content_id:
+                content_id = attachment.content_id
+                if not (content_id.startswith("<") and content_id.endswith(">")):
+                    content_id = f"<{content_id}>"
+                part.add_header("Content-ID", content_id)
             message.attach(part)
     else:
         message.attach(html_part)
