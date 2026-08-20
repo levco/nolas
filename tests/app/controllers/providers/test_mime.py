@@ -45,3 +45,67 @@ class TestBuildMimeMessage:
         assert len(attachment_parts) == 1
         assert attachment_parts[0].get_filename() == "report.pdf"
         assert attachment_parts[0].get_payload(decode=True) == b"%PDF-1.4"
+        assert attachment_parts[0]["Content-ID"] is None
+
+    def test_inline_cid_image_attachment(self) -> None:
+        raw, _ = build_mime_message(
+            to=[EmailAddress(name="a", email="a@b.co")],
+            subject="With inline image",
+            body='<p>see <img src="cid:logo123"></p>',
+            attachments=[
+                AttachmentData(
+                    filename="logo.png",
+                    content_type="image/png",
+                    data=b"\x89PNG\r\n",
+                    content_id="logo123",
+                    is_inline=True,
+                )
+            ],
+        )
+        parsed = email.message_from_bytes(raw)
+        inline_parts = [p for p in parsed.walk() if p.get_content_type() == "image/png"]
+        assert len(inline_parts) == 1
+        part = inline_parts[0]
+        assert part.get_filename() == "logo.png"
+        assert part.get_payload(decode=True) == b"\x89PNG\r\n"
+        assert part["Content-ID"] == "<logo123>"
+        assert "inline" in str(part["Content-Disposition"])
+
+    def test_inline_content_id_already_bracketed(self) -> None:
+        raw, _ = build_mime_message(
+            to=[EmailAddress(name="a", email="a@b.co")],
+            subject="With inline image",
+            body="<p>see attached</p>",
+            attachments=[
+                AttachmentData(
+                    filename="logo.png",
+                    content_type="image/png",
+                    data=b"\x89PNG\r\n",
+                    content_id="<logo123>",
+                    is_inline=True,
+                )
+            ],
+        )
+        parsed = email.message_from_bytes(raw)
+        inline_parts = [p for p in parsed.walk() if p.get_content_type() == "image/png"]
+        assert inline_parts[0]["Content-ID"] == "<logo123>"
+
+    def test_non_inline_attachment_with_explicit_disposition(self) -> None:
+        raw, _ = build_mime_message(
+            to=[EmailAddress(name="a", email="a@b.co")],
+            subject="With attachment",
+            body="<p>see attached</p>",
+            attachments=[
+                AttachmentData(
+                    filename="report.pdf",
+                    content_type="application/pdf",
+                    data=b"%PDF-1.4",
+                    content_disposition="attachment",
+                    is_inline=False,
+                )
+            ],
+        )
+        parsed = email.message_from_bytes(raw)
+        attachment_parts = [p for p in parsed.walk() if "attachment" in str(p.get("Content-Disposition", ""))]
+        assert len(attachment_parts) == 1
+        assert attachment_parts[0].get_content_type() == "application/pdf"

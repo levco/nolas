@@ -2,6 +2,7 @@
 Pydantic models for message-related API endpoints.
 """
 
+import base64
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -41,11 +42,45 @@ class MessageAttachment(BaseModel):
 
 
 class AttachmentData(BaseModel):
-    """Attachment data model for API requests."""
+    """Attachment data model for API requests.
+
+    Internal representation used downstream by every send path (JSON-body and multipart),
+    mirroring the field names/types of the read-side `MessageAttachment` model.
+    """
 
     filename: str
     content_type: str
     data: bytes
+    content_id: str | None = None
+    content_disposition: str | None = None
+    is_inline: bool = False
+
+
+class SendMessageAttachment(BaseModel):
+    """Attachment as sent in a JSON send-message request body (base64-encoded content).
+
+    Matches the shape the official Nylas Python SDK's `messages.send()` sends for attachments
+    whose total size is under the JSON-body threshold (3MB).
+    """
+
+    filename: str
+    content_type: str
+    content: str
+    size: int | None = None
+    content_id: str | None = None
+    content_disposition: str | None = None
+    is_inline: bool = False
+
+    def to_attachment_data(self) -> AttachmentData:
+        """Decode into the internal attachment representation used by the send path."""
+        return AttachmentData(
+            filename=self.filename,
+            content_type=self.content_type,
+            data=base64.b64decode(self.content),
+            content_id=self.content_id,
+            content_disposition=self.content_disposition,
+            is_inline=self.is_inline,
+        )
 
 
 class BaseMessage(BaseModel):
@@ -113,9 +148,14 @@ class UpdateMessageRequest(BaseModel):
 
 
 class SendMessageData(BaseMessage):
-    """Send message model."""
+    """Send message model.
 
-    pass
+    Includes `grant_id` because the official Nylas Python SDK's `messages.send()`
+    deserializes this object into its own `Message` dataclass, which requires
+    `grant_id` with no default.
+    """
+
+    grant_id: str
 
 
 class SendMessageRequest(BaseModel):
@@ -129,6 +169,7 @@ class SendMessageRequest(BaseModel):
     bcc: list[EmailAddress] | None = None
     reply_to: list[EmailAddress] | None = None
     reply_to_message_id: str | None = None
+    attachments: list[SendMessageAttachment] | None = None
 
     class Config:
         populate_by_name = True

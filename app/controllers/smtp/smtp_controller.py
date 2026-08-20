@@ -123,11 +123,15 @@ class SMTPController:
                         filename=attachment.filename,
                         size=len(attachment.data),
                         content_type=attachment.content_type,
+                        is_inline=attachment.is_inline,
+                        content_id=attachment.content_id,
+                        content_disposition=attachment.content_disposition,
                     )
                 )
 
         data = SendMessageData(
             id=message_id,
+            grant_id=str(account.uuid),
             subject=subject,
             from_=from_ or [EmailAddress(name=account.email, email=account.email)],
             to=to,
