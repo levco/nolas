@@ -2,7 +2,14 @@ import base64
 
 import pytest
 
-from app.api.payloads.messages import SendMessageAttachment, SendMessageRequest, UpdateMessageRequest
+from app.api.payloads.messages import (
+    EmailAddress,
+    SendMessageAttachment,
+    SendMessageData,
+    SendMessageRequest,
+    SendMessageResponse,
+    UpdateMessageRequest,
+)
 
 
 @pytest.mark.parametrize("name", [None, "", "   "])
@@ -35,6 +42,27 @@ def test_send_message_defaults_missing_recipient_name_to_email() -> None:
 @pytest.mark.parametrize(("unread", "expected"), [(True, True), (False, False)])
 def test_update_message_accepts_unread(unread: bool, expected: bool) -> None:
     assert UpdateMessageRequest(unread=unread).unread is expected
+
+
+def test_send_message_response_data_includes_grant_id() -> None:
+    """The official Nylas Python SDK's `messages.send()` deserializes the response's `data` object
+    into its own `Message` dataclass, which requires `grant_id` with no default — omitting it here
+    (as the real Nylas API never does) crashes every caller using that SDK with `KeyError: 'grant_id'`
+    after the message has already been sent.
+    """
+    response = SendMessageResponse(
+        request_id="req-1",
+        grant_id="grant-1",
+        data=SendMessageData(
+            id="msg-1",
+            grant_id="grant-1",
+            subject="Subject",
+            body="Body",
+            from_=[EmailAddress(name="from@example.com", email="from@example.com")],
+        ),
+    )
+
+    assert response.model_dump()["data"]["grant_id"] == "grant-1"
 
 
 def test_send_message_request_parses_json_body_attachments() -> None:

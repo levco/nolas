@@ -131,6 +131,7 @@ class SMTPController:
 
         data = SendMessageData(
             id=message_id,
+            grant_id=str(account.uuid),
             subject=subject,
             from_=from_ or [EmailAddress(name=account.email, email=account.email)],
             to=to,

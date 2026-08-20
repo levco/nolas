@@ -279,6 +279,7 @@ async def send_message(
 
         response_data = SendMessageData(
             id=result.message_id,
+            grant_id=grant_id,
             subject=message_data.subject,
             body=message_data.body,
             from_=sender,

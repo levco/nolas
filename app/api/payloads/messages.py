@@ -148,9 +148,14 @@ class UpdateMessageRequest(BaseModel):
 
 
 class SendMessageData(BaseMessage):
-    """Send message model."""
+    """Send message model.
 
-    pass
+    Includes `grant_id` because the official Nylas Python SDK's `messages.send()`
+    deserializes this object into its own `Message` dataclass, which requires
+    `grant_id` with no default.
+    """
+
+    grant_id: str
 
 
 class SendMessageRequest(BaseModel):
