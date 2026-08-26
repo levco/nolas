@@ -1,4 +1,16 @@
+import re
+
 from app.controllers.providers.base import ListMessagesParams, ListThreadsParams
+
+# Gmail's subject:"..." exact-phrase operator doesn't reliably match subjects
+# containing operator characters like `|` even when quoted, so strip them and use
+# the subject:(...) field-scoped AND-of-words operator instead.
+_GMAIL_SUBJECT_UNSAFE_CHARS = re.compile(r'["|()+:]')
+
+
+def _build_subject_clause(subject: str) -> str:
+    words = _GMAIL_SUBJECT_UNSAFE_CHARS.sub(" ", subject).split()
+    return f"subject:({' '.join(words)})" if words else ""
 
 
 def build_gmail_query(params: ListMessagesParams) -> str:
@@ -22,8 +34,9 @@ def build_gmail_query(params: ListMessagesParams) -> str:
         clauses.append("{" + ors + "}")
 
     if params.subject:
-        escaped = params.subject.replace('"', '\\"')
-        clauses.append(f'subject:"{escaped}"')
+        clause = _build_subject_clause(params.subject)
+        if clause:
+            clauses.append(clause)
 
     # Gmail accepts epoch seconds for after:/before:.
     if params.received_after is not None:
@@ -60,8 +73,9 @@ def build_gmail_thread_query(params: ListThreadsParams) -> str:
         clauses.append("{" + ors + "}")
 
     if params.subject:
-        escaped = params.subject.replace('"', '\\"')
-        clauses.append(f'subject:"{escaped}"')
+        clause = _build_subject_clause(params.subject)
+        if clause:
+            clauses.append(clause)
     if params.latest_message_after is not None:
         clauses.append(f"after:{params.latest_message_after}")
     if params.latest_message_before is not None:
