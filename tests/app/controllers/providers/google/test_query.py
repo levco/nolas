@@ -26,9 +26,13 @@ class TestBuildGmailQuery:
         assert "after:1700000000" in query
         assert "before:1710000000" in query
 
-    def test_subject_quoted(self) -> None:
+    def test_subject_grouped(self) -> None:
         query = build_gmail_query(ListMessagesParams(subject='Deal "A"'))
-        assert 'subject:"Deal \\"A\\""' in query
+        assert "subject:(Deal A)" in query
+
+    def test_subject_strips_gmail_operator_chars(self) -> None:
+        query = build_gmail_query(ListMessagesParams(subject="Shell | Wellington, FL | $9.45M (Request)"))
+        assert "subject:(Shell Wellington, FL $9.45M Request)" in query
 
     def test_native_query_passthrough(self) -> None:
         query = build_gmail_query(ListMessagesParams(search_query_native="has:attachment"))
@@ -60,7 +64,7 @@ class TestBuildGmailThreadQuery:
         assert "cc:cc@example.com" in query
         assert "bcc:bcc@example.com" in query
         assert "in:inbox" in query
-        assert 'subject:"Deal \\"A\\""' in query
+        assert "subject:(Deal A)" in query
         assert "after:1700000000" in query
         assert "before:1710000000" in query
         assert "is:unread" in query
