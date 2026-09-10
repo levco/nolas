@@ -327,7 +327,7 @@ async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest
     Supports the official Nylas Python SDK's multipart format (used for attachments whose total
     size is 3MB or more):
     - "message" field (lowercase): JSON string with message data, sent as an application/json part
-      with no filename.
+      with an empty filename.
     - every other field is an attachment. The SDK names each attachment field
       `attachment.get("content_id", f"file{index}")`, so a field name that isn't the generated
       `file{N}` placeholder is threaded through as that attachment's content_id (implying it's
@@ -344,9 +344,9 @@ async def _parse_multipart_request(request: Request) -> tuple[SendMessageRequest
     form = await request.form()
     for field_name, field_value in form.multi_items():
         if field_name in _MESSAGE_FIELD_NAMES and message_json is None:
-            if isinstance(field_value, str):
-                message_json = json.loads(field_value)
-            else:
+            try:
+                message_json = json.loads(field_value if isinstance(field_value, str) else await field_value.read())
+            except UnicodeDecodeError:
                 raise ValueError(f"'{field_name}' field must be a JSON string")
             continue
 

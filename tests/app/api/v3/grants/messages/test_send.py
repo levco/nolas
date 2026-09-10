@@ -63,8 +63,11 @@ class TestParseMultipartRequestSdkFormat:
     async def test_lowercase_message_field_and_file_n_attachments(self) -> None:
         request = _build_multipart_request(
             "b1",
-            fields=[("message", _message_json())],
-            files=[("file0", "report.pdf", "application/pdf", b"%PDF-1.4")],
+            fields=[],
+            files=[
+                ("message", "", "application/json", _message_json().encode()),
+                ("file0", "report.pdf", "application/pdf", b"%PDF-1.4"),
+            ],
         )
 
         message_data, attachments = await _parse_multipart_request(request)
