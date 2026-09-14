@@ -152,7 +152,7 @@ class JobProcessorController:
             renewal_payload = SubscriptionRenewalJobPayload.model_validate(job.payload)
             account_id_raw = renewal_payload.account_id
 
-            account = await self._account_repo.get(account_id_raw)
+            account = await self._account_repo.get_by_id_with_app(account_id_raw)
             if account is None:
                 logger.warning(f"subscription_renewal account {account_id_raw} no longer exists; skipping")
                 return

@@ -188,6 +188,31 @@ class TestJobProcessorController:
         job_repo.mark_retry_or_failed.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_processes_subscription_renewal_with_app_preloaded(self) -> None:
+        controller, job_repo, _, subscription_manager, account_repo, _ = _make_controller()
+        account = SimpleNamespace(status=AccountStatus.active)
+        account_repo.get_by_id_with_app.return_value = account
+        job = cast(
+            Job,
+            SimpleNamespace(
+                id=19,
+                type=JobType.subscription_renewal,
+                payload={"account_id": 123},
+                attempts=0,
+                max_attempts=5,
+            ),
+        )
+        job_repo.requeue_stale_processing.return_value = 0
+        job_repo.claim_batch.return_value = [job]
+
+        processed = await controller.process_available_jobs(worker_id="w-1", batch_size=10, lock_timeout_seconds=300)
+
+        assert processed == 1
+        account_repo.get_by_id_with_app.assert_awaited_once_with(123)
+        subscription_manager.ensure_subscription.assert_awaited_once_with(account)
+        job_repo.mark_completed.assert_awaited_once_with(job)
+
+    @pytest.mark.asyncio
     async def test_processes_webhook_delivery_job(self) -> None:
         controller, job_repo, _, _, account_repo, webhook_sender = _make_controller()
         account_repo.get_by_id_with_app.return_value = SimpleNamespace(email="user@example.com")
