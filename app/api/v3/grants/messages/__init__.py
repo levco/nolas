@@ -18,6 +18,7 @@ from app.api.payloads.messages import (
     AttachmentData,
     EmailAddress,
     MessageListResponse,
+    Message,
     MessageResponse,
     SendMessageData,
     SendMessageRequest,
@@ -177,9 +178,11 @@ async def list_messages(
     received_before: int | None = Query(None),
     fields: str | None = Query(None),
     search_query_native: str | None = Query(None),
+    metadata_pair: str | None = Query(None),
     query_imap: bool | None = Query(None, include_in_schema=False),
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
+    email_repo: EmailRepo = Depends(Provide[ApplicationContainer.repos.email]),
 ) -> MessageListResponse | JSONResponse:
     """
     Lists messages for a grant.
@@ -189,6 +192,54 @@ async def list_messages(
     if error_response:
         return error_response
     assert account is not None  # account is guaranteed to be not None when error_response is None
+
+    if metadata_pair:
+        key, separator, value = metadata_pair.partition(":")
+        if separator == "" or not value or key not in {f"key{i}" for i in range(1, 6)}:
+            return create_error_response(
+                error_type="invalid_request_error",
+                message="metadata_pair must use key1 through key5 and include a value",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            stored_messages = await email_repo.get_by_account_and_metadata_pair(account.id, key, value, limit)
+            messages: list[Message] = []
+            for stored_message in stored_messages:
+                message = await registry.get_client(account).get_message(
+                    account, stored_message.email_id, include_headers=_wants_headers(fields)
+                )
+                if message is not None:
+                    message.metadata = stored_message.message_metadata
+                    messages.append(message)
+                else:
+                    messages.append(
+                        Message(
+                            id=stored_message.email_id,
+                            thread_id=stored_message.thread_id,
+                            grant_id=grant_id,
+                            subject="",
+                            body="",
+                            **{"from": []},
+                            starred=False,
+                            unread=False,
+                            folders=[],
+                            date=0,
+                            object="message",
+                            snippet="",
+                            metadata=stored_message.message_metadata,
+                        )
+                    )
+            return MessageListResponse(request_id=str(uuid.uuid4()), data=messages)
+        except ProviderError as e:
+            return provider_error_response(e)
+        except Exception:
+            logger.exception("Failed to list messages for metadata pair %s", metadata_pair)
+            return create_error_response(
+                error_type="provider_error",
+                message="Failed to list messages",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                provider_error={"code": "InternalError", "message": "Failed to list messages by metadata"},
+            )
 
     params = ListMessagesParams(
         limit=limit,
@@ -277,6 +328,9 @@ async def send_message(
             attachments=attachments,
         )
 
+        if message_data.metadata:
+            await email_repo.save_send_metadata(account.id, result.message_id, result.thread_id, message_data.metadata)
+
         response_data = SendMessageData(
             id=result.message_id,
             grant_id=grant_id,
@@ -288,6 +342,8 @@ async def send_message(
             bcc=message_data.bcc or [],
             reply_to=message_data.reply_to or [],
             reply_to_message_id=message_data.reply_to_message_id,
+            metadata=message_data.metadata,
+            thread_id=result.thread_id,
         )
         return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=response_data)
 

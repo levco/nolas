@@ -18,6 +18,30 @@ class EmailRepo(BaseRepo[Email]):
         result = await self.execute(self.base_stmt.where(Email.account_id == account_id, Email.email_id == email_id))
         return result.one_or_none()
 
+    async def get_by_account_and_metadata_pair(self, account_id: int, key: str, value: str, limit: int) -> list[Email]:
+        result = await self.execute(
+            self.base_stmt.where(
+                Email.account_id == account_id,
+                Email.message_metadata.contains({key: value}),
+            ).limit(limit)
+        )
+        return list(result.all())
+
+    async def save_send_metadata(
+        self,
+        account_id: int,
+        email_id: str,
+        thread_id: str,
+        metadata: dict[str, str],
+    ) -> None:
+        existing = await self.get_by_account_and_email_id(account_id, email_id)
+        if existing is not None:
+            await self.update(existing, {"message_metadata": metadata})
+            return
+        await self.persist(
+            Email(account_id=account_id, email_id=email_id, thread_id=thread_id, folder="", message_metadata=metadata)
+        )
+
     async def get_by_account_and_uid_or_email_id(
         self, account_id: int, folder: str, uid: int, email_id: str
     ) -> Email | None:
