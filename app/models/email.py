@@ -1,5 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy import UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TimestampMixin
@@ -15,5 +16,9 @@ class Email(Base, TimestampMixin):
     account_id: Mapped[int] = mapped_column(sa.ForeignKey("accounts.id"), nullable=False)
     folder: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     uid: Mapped[int] = mapped_column(sa.Integer, nullable=True)
+    message_metadata: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
 
-    __table_args__ = (UniqueConstraint("account_id", "email_id", name="uq_account_email"),)
+    __table_args__ = (
+        UniqueConstraint("account_id", "email_id", name="uq_account_email"),
+        sa.Index("ix_emails_message_metadata", "message_metadata", postgresql_using="gin"),
+    )

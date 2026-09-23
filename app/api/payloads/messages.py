@@ -96,6 +96,7 @@ class BaseMessage(BaseModel):
     reply_to: list[EmailAddress] = Field(default_factory=list)
     reply_to_message_id: str | None = None
     attachments: list[MessageAttachment] = Field(default_factory=list)
+    metadata: dict[str, str] | None = None
 
     class Config:
         populate_by_name = True
@@ -156,6 +157,7 @@ class SendMessageData(BaseMessage):
     """
 
     grant_id: str
+    thread_id: str | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -170,6 +172,7 @@ class SendMessageRequest(BaseModel):
     reply_to: list[EmailAddress] | None = None
     reply_to_message_id: str | None = None
     attachments: list[SendMessageAttachment] | None = None
+    metadata: dict[str, str] | None = None
 
     class Config:
         populate_by_name = True
