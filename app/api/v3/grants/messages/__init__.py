@@ -193,7 +193,7 @@ async def list_messages(
         return error_response
     assert account is not None  # account is guaranteed to be not None when error_response is None
 
-    if metadata_pair:
+    if metadata_pair is not None:
         key, separator, value = metadata_pair.partition(":")
         if separator == "" or not value or key not in {f"key{i}" for i in range(1, 6)}:
             return create_error_response(
@@ -202,7 +202,17 @@ async def list_messages(
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            stored_messages = await email_repo.get_by_account_and_metadata_pair(account.id, key, value, limit)
+            after_id = int(page_token) if page_token is not None else None
+        except ValueError:
+            return create_error_response(
+                error_type="invalid_request_error",
+                message="Invalid page token",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            stored_messages = await email_repo.get_by_account_and_metadata_pair(account.id, key, value, limit, after_id)
+            next_cursor = str(stored_messages[limit - 1].id) if len(stored_messages) > limit else None
+            stored_messages = stored_messages[:limit]
             messages: list[Message] = []
             for stored_message in stored_messages:
                 message = await registry.get_client(account).get_message(
@@ -229,7 +239,7 @@ async def list_messages(
                             metadata=stored_message.message_metadata,
                         )
                     )
-            return MessageListResponse(request_id=str(uuid.uuid4()), data=messages)
+            return MessageListResponse(request_id=str(uuid.uuid4()), data=messages, next_cursor=next_cursor)
         except ProviderError as e:
             return provider_error_response(e)
         except Exception:
@@ -329,7 +339,12 @@ async def send_message(
         )
 
         if message_data.metadata:
-            await email_repo.save_send_metadata(account.id, result.message_id, result.thread_id, message_data.metadata)
+            try:
+                await email_repo.save_send_metadata(
+                    account.id, result.message_id, result.thread_id, message_data.metadata
+                )
+            except Exception:
+                logger.exception("Email sent but failed to persist metadata for message %s", result.message_id)
 
         response_data = SendMessageData(
             id=result.message_id,

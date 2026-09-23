@@ -231,6 +231,34 @@ async def test_send_persists_metadata_before_returning(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_send_succeeds_when_metadata_persistence_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
+    provider = AsyncMock()
+    provider.send_message.return_value = ProviderSendResult(message_id="message-1", thread_id="thread-1")
+    registry = Mock(get_client=Mock(return_value=provider))
+    email_repo = AsyncMock()
+    email_repo.save_send_metadata.side_effect = RuntimeError("database unavailable")
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+
+    response = await messages_api.send_message(
+        request=_build_json_request(
+            {
+                "to": [{"email": "recipient@example.com"}],
+                "subject": "Subject",
+                "body": "Body",
+                "metadata": {"key1": "send-key"},
+            }
+        ),
+        grant_id=str(account.uuid),
+        app=SimpleNamespace(id=1),
+        registry=registry,
+        email_repo=email_repo,
+    )
+
+    assert response.data.id == "message-1"
+
+
+@pytest.mark.asyncio
 async def test_list_by_metadata_returns_stored_ids_when_provider_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
     provider = AsyncMock()
@@ -266,3 +294,69 @@ async def test_list_by_metadata_returns_stored_ids_when_provider_is_not_ready(mo
     assert response.data[0].thread_id == "thread-1"
     assert response.data[0].metadata == {"key1": "send-key"}
     provider.list_messages.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_by_metadata_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4())
+    provider = AsyncMock()
+    provider.get_message.return_value = None
+    registry = Mock(get_client=Mock(return_value=provider))
+    email_repo = AsyncMock()
+    email_repo.get_by_account_and_metadata_pair.return_value = [
+        SimpleNamespace(id=11, email_id="message-1", thread_id="thread-1", message_metadata={"key1": "send-key"}),
+        SimpleNamespace(id=12, email_id="message-2", thread_id="thread-2", message_metadata={"key1": "send-key"}),
+    ]
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+
+    response = await messages_api.list_messages(
+        grant_id=str(account.uuid),
+        limit=1,
+        page_token="10",
+        thread_id=None,
+        in_=None,
+        from_=None,
+        any_email=None,
+        subject=None,
+        received_after=None,
+        received_before=None,
+        fields=None,
+        search_query_native=None,
+        metadata_pair="key1:send-key",
+        query_imap=None,
+        app=SimpleNamespace(id=1),
+        registry=registry,
+        email_repo=email_repo,
+    )
+
+    assert [item.id for item in response.data] == ["message-1"]
+    assert response.next_cursor == "11"
+    email_repo.get_by_account_and_metadata_pair.assert_awaited_once_with(7, "key1", "send-key", 1, 10)
+
+
+@pytest.mark.asyncio
+async def test_list_rejects_empty_metadata_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4())
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+
+    response = await messages_api.list_messages(
+        grant_id=str(account.uuid),
+        limit=50,
+        page_token=None,
+        thread_id=None,
+        in_=None,
+        from_=None,
+        any_email=None,
+        subject=None,
+        received_after=None,
+        received_before=None,
+        fields=None,
+        search_query_native=None,
+        metadata_pair="",
+        query_imap=None,
+        app=SimpleNamespace(id=1),
+        registry=Mock(),
+        email_repo=AsyncMock(),
+    )
+
+    assert response.status_code == 400
