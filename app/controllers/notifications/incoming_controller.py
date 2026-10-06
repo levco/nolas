@@ -181,9 +181,14 @@ class IncomingNotificationController:
             return
 
         try:
+            logger.info(
+                f"Processing Microsoft notification; email={account.email}, "
+                f"event_type={event_type}, message_id={message_id}"
+            )
             await self._emit_message_event(
                 account, message_id, provider=AccountProvider.microsoft, event_type=event_type
             )
+            logger.info(f"Processed Microsoft notification for account: {account.email}")
         except ProviderAuthError:
             logger.warning(f"Auth failure processing Graph notification for {account.email}")
         except Exception:
