@@ -1,6 +1,7 @@
 from typing import cast
 
 from dependency_injector import containers, providers
+from redis.asyncio import Redis
 
 from app.controllers.email.email_controller import EmailController
 from app.controllers.grant.authorization_controller import AuthorizationController
@@ -18,6 +19,7 @@ from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.imap_adapter import ImapProviderAdapter
 from app.controllers.providers.microsoft.graph_client import GraphClient
+from app.controllers.providers.microsoft.concurrency_limiter import MicrosoftConcurrencyLimiter
 from app.controllers.providers.registry import ProviderRegistry
 from app.controllers.providers.token_service import TokenService
 from app.controllers.smtp.smtp_controller import SMTPController
@@ -75,8 +77,25 @@ class ControllerContainer(containers.DeclarativeContainer):
     google_http_client = providers.Singleton(
         AuthorizedHttpClient, token_service=token_service, timeout=settings.google.request_timeout
     )
+    redis_client = providers.Singleton(
+        Redis.from_url,
+        settings.redis.url,
+        socket_timeout=settings.redis.socket_timeout_seconds,
+        socket_connect_timeout=settings.redis.socket_timeout_seconds,
+    )
+    microsoft_concurrency_limiter = providers.Singleton(
+        MicrosoftConcurrencyLimiter,
+        redis=redis_client,
+        total_limit=settings.microsoft.concurrency_limit,
+        worker_limit=settings.microsoft.worker_concurrency_limit,
+        lease_seconds=settings.microsoft.concurrency_lease_seconds,
+        acquire_timeout_seconds=settings.microsoft.concurrency_acquire_timeout_seconds,
+    )
     microsoft_http_client = providers.Singleton(
-        AuthorizedHttpClient, token_service=token_service, timeout=settings.microsoft.request_timeout
+        AuthorizedHttpClient,
+        token_service=token_service,
+        timeout=settings.microsoft.request_timeout,
+        concurrency_limiter=microsoft_concurrency_limiter,
     )
 
     gmail_client = providers.Singleton(GmailClient, http_client=google_http_client)

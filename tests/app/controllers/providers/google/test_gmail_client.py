@@ -1,8 +1,6 @@
 import asyncio
 import base64
 import json
-import sys
-import types
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -10,24 +8,6 @@ from unittest.mock import AsyncMock
 
 from app.controllers.providers.base import ListThreadsParams
 from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
-
-if "aiohttp" not in sys.modules:
-    aiohttp_stub = types.ModuleType("aiohttp")
-
-    class _ClientTimeout:
-        def __init__(self, total: int | None = None) -> None:
-            self.total = total
-
-    class _ClientSession:
-        closed = False
-
-    class _ClientResponse:
-        pass
-
-    aiohttp_stub.ClientTimeout = _ClientTimeout
-    aiohttp_stub.ClientSession = _ClientSession
-    aiohttp_stub.ClientResponse = _ClientResponse
-    sys.modules["aiohttp"] = aiohttp_stub
 
 from app.controllers.providers.google.gmail_client import GMAIL_BATCH_BASE, GmailClient
 

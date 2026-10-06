@@ -1,6 +1,4 @@
 import asyncio
-import sys
-import types
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,13 +7,7 @@ import pytest
 
 from app.controllers.providers.base import ListMessagesParams, ListThreadsParams
 
-# The concrete HTTP client pulls in application repository dependencies that are
-# unrelated to this provider unit test.
-http_module = types.ModuleType("app.controllers.providers.http")
-http_module.AuthorizedHttpClient = object
-sys.modules.setdefault("app.controllers.providers.http", http_module)
-
-from app.controllers.providers.microsoft.graph_client import GraphClient  # noqa: E402
+from app.controllers.providers.microsoft.graph_client import GraphClient
 
 
 def test_create_subscription_includes_updates_and_immutable_ids() -> None:
@@ -159,6 +151,8 @@ def test_marking_message_read_updates_all_unread_thread_messages_in_batch() -> N
                 "/me/messages/target",
                 "/me/messages/sibling",
             ]
+            assert "dependsOn" not in body["requests"][0]
+            assert body["requests"][1]["dependsOn"] == ["0"]
             return {"responses": [{"id": "0", "status": 200}, {"id": "1", "status": 200}]}
         raise AssertionError(f"Unexpected request: {method} {url}")
 
@@ -189,3 +183,37 @@ def test_marking_message_unread_only_updates_requested_message() -> None:
         "https://graph.microsoft.com/v1.0/me/messages/target",
     )
     assert patch_call.kwargs["json_body"] == {"isRead": False}
+
+
+def test_sequential_batch_retries_siblings_skipped_after_deleted_message() -> None:
+    http = SimpleNamespace(
+        request=AsyncMock(
+            side_effect=[
+                {"responses": [{"id": "1", "status": 424}, {"id": "0", "status": 404}]},
+                {"responses": [{"id": "0", "status": 200}]},
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    asyncio.run(client._mark_messages_read(account, ["deleted", "sibling"]))
+
+    retry = http.request.await_args.kwargs["json_body"]["requests"]
+    assert len(retry) == 1
+    assert retry[0]["url"] == "/me/messages/sibling"
+    assert "dependsOn" not in retry[0]
+
+
+def test_sequential_batch_propagates_rate_limit_without_retrying_dependencies() -> None:
+    from app.controllers.providers.exceptions import ProviderRateLimitError
+
+    http = SimpleNamespace(
+        request=AsyncMock(return_value={"responses": [{"id": "1", "status": 424}, {"id": "0", "status": 429}]})
+    )
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    with pytest.raises(ProviderRateLimitError):
+        asyncio.run(client._mark_messages_read(account, ["throttled", "sibling"]))
+    assert http.request.await_count == 1

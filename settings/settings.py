@@ -69,6 +69,17 @@ class MicrosoftProviderSettings(BaseSettings):
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send",
     )
     request_timeout: int = Field(alias="MICROSOFT_REQUEST_TIMEOUT", default=30)
+    concurrency_limit: int = Field(alias="MICROSOFT_CONCURRENCY_LIMIT", default=4, ge=1, le=4)
+    worker_concurrency_limit: int = Field(alias="MICROSOFT_WORKER_CONCURRENCY_LIMIT", default=3, ge=0, le=3)
+    concurrency_lease_seconds: int = Field(alias="MICROSOFT_CONCURRENCY_LEASE_SECONDS", default=30, ge=1)
+    concurrency_acquire_timeout_seconds: int = Field(
+        alias="MICROSOFT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS", default=30, ge=1
+    )
+
+
+class RedisSettings(BaseSettings):
+    url: str = Field(alias="REDIS_URL", default="redis://redis:6379/0")
+    socket_timeout_seconds: int = Field(alias="REDIS_SOCKET_TIMEOUT_SECONDS", default=3, ge=1)
 
 
 class NotificationQueueSettings(BaseSettings):
@@ -113,6 +124,7 @@ class Settings(BaseSettings):
     api: ApiSettings = Field(default_factory=ApiSettings)
     google: GoogleProviderSettings = Field(default_factory=GoogleProviderSettings)
     microsoft: MicrosoftProviderSettings = Field(default_factory=MicrosoftProviderSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
     subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
     retention: RetentionSettings = Field(default_factory=RetentionSettings)
     notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)

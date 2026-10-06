@@ -13,6 +13,7 @@ from app.controllers.notifications.incoming_controller import (
 )
 from app.controllers.notifications.subscription_manager import SubscriptionManager
 from app.controllers.webhooks.sender import WebhookSender
+from app.controllers.providers.microsoft.concurrency_limiter import microsoft_worker_requests
 from app.exceptions import WebhookDeliveryError
 from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobType
@@ -107,7 +108,8 @@ class JobProcessorController:
 
     async def _process_one(self, job: Job) -> None:
         try:
-            await self._dispatch(job)
+            with microsoft_worker_requests():
+                await self._dispatch(job)
         except Exception as exc:
             retry_delay = self._retry_delay_seconds(job.attempts + 1)
             await self._job_repo.mark_retry_or_failed(job, str(exc), retry_delay_seconds=retry_delay)

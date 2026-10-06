@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import sys
+from functools import partial
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -110,11 +111,7 @@ async def main() -> None:
                 name=f"job-processor-{idx}",
             )
             task.add_done_callback(
-                lambda completed_task, wid=worker_id: _handle_worker_task_done(
-                    completed_task,
-                    wid,
-                    shutdown_event,
-                )
+                partial(_handle_worker_task_done, worker_id=worker_id, shutdown_event=shutdown_event)
             )
             worker_tasks.append(task)
 
@@ -125,6 +122,9 @@ async def main() -> None:
         await asyncio.gather(*worker_tasks, return_exceptions=True)
 
     await token_service.close()
+    await container.controllers.google_http_client().close()
+    await container.controllers.microsoft_http_client().close()
+    await container.controllers.redis_client().aclose()
 
 
 if __name__ == "__main__":

@@ -154,6 +154,8 @@ class GraphClient(ProviderClient):
                     "requests": [
                         {
                             "id": str(index),
+                            # One active operation per batch matches its single semaphore slot.
+                            **({"dependsOn": [str(index - 1)]} if index else {}),
                             "method": "PATCH",
                             "url": f"/me/messages/{batch_message_id}",
                             "headers": {"Content-Type": "application/json"},
@@ -167,9 +169,14 @@ class GraphClient(ProviderClient):
             subresponses = response.get("responses", [])
             if len(subresponses) != len(batch_ids):
                 raise ProviderError("Microsoft Graph returned an incomplete batch update response.")
+            skipped_ids: list[str] = []
             for subresponse in subresponses:
                 status_code = int(subresponse.get("status", 500))
                 if 200 <= status_code < 300 or status_code == 404:
+                    continue
+                if status_code == 424:
+                    # A deleted message can break the dependency chain; retry skipped siblings.
+                    skipped_ids.append(batch_ids[int(subresponse["id"])])
                     continue
                 if status_code == 429:
                     raise ProviderRateLimitError("Microsoft Graph batch update was rate limited.")
@@ -177,6 +184,10 @@ class GraphClient(ProviderClient):
                     f"Microsoft Graph batch update failed ({status_code}).",
                     status_code=status_code,
                 )
+            if len(skipped_ids) == len(batch_ids):
+                raise ProviderError("Microsoft Graph batch update made no progress.")
+            if skipped_ids:
+                await self._mark_messages_read(account, skipped_ids)
 
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
         if params.page_token:

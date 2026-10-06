@@ -3,7 +3,8 @@ FastAPI application entry point - Nylas-compatible API
 """
 
 import logging
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
@@ -52,7 +53,19 @@ def _setup_error_handlers(app: FastAPI) -> None:
 
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     """Create and configure FastAPI application."""
-    app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        try:
+            yield
+        finally:
+            if container is not None:
+                await container.controllers.google_http_client().close()
+                await container.controllers.microsoft_http_client().close()
+                await container.controllers.token_service().close()
+                await container.controllers.redis_client().aclose()
+
+    app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0", lifespan=lifespan)
 
     # Configure OpenAPI security scheme for Bearer token
     def custom_openapi() -> dict[str, Any]:
