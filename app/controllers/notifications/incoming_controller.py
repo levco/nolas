@@ -209,7 +209,7 @@ class IncomingNotificationController:
         except ProviderNotFoundError:
             return
         except ProviderError as e:
-            if e.status_code == 429 or e.status_code >= 500:
+            if provider == AccountProvider.microsoft and (e.status_code == 429 or e.status_code >= 500):
                 raise
             logger.warning(f"Could not fetch message {message_id} for {account.email}: {e.message}")
             return
