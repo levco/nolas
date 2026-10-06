@@ -124,6 +124,7 @@ async def main() -> None:
     await token_service.close()
     await container.controllers.google_http_client().close()
     await container.controllers.microsoft_http_client().close()
+    await container.controllers.webhook_sender().close_session()
     await container.controllers.redis_client().aclose()
 
 

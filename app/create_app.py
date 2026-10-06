@@ -63,6 +63,7 @@ def create_app(container: ApplicationContainer | None = None) -> FastAPI:
                 await container.controllers.google_http_client().close()
                 await container.controllers.microsoft_http_client().close()
                 await container.controllers.token_service().close()
+                await container.controllers.webhook_sender().close_session()
                 await container.controllers.redis_client().aclose()
 
     app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0", lifespan=lifespan)
