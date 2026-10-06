@@ -13,7 +13,7 @@ from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
 from app.api.middlewares.auto_commit import AutoCommitMiddleware
 from app.api.routes import api_router
-from app.container import ApplicationContainer
+from app.container import ApplicationContainer, close_controller_resources
 from app.environment import EnvironmentName
 from app.exceptions import BaseError, ErrorType
 from settings import settings
@@ -60,11 +60,7 @@ def create_app(container: ApplicationContainer | None = None) -> FastAPI:
             yield
         finally:
             if container is not None:
-                await container.controllers.google_http_client().close()
-                await container.controllers.microsoft_http_client().close()
-                await container.controllers.token_service().close()
-                await container.controllers.webhook_sender().close_session()
-                await container.controllers.redis_client().aclose()
+                await close_controller_resources(container)
 
     app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0", lifespan=lifespan)
 
