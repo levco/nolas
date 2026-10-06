@@ -26,7 +26,8 @@ Set `REDIS_URL` on both the API and Nolas workers to the same Redis instance
 (default: `redis://redis:6379/0`; `rediss://` supports TLS).
 `REDIS_SOCKET_TIMEOUT_SECONDS` defaults to 3.
 
-Microsoft Graph requests share a per-mailbox limit across Nolas replicas and apps.
+Microsoft Graph requests share a per-grant limit across Nolas replicas.
+Different grants have independent capacity, even when they use the same mailbox.
 The default `MICROSOFT_CONCURRENCY_LIMIT=4` allows four active requests;
 `MICROSOFT_WORKER_CONCURRENCY_LIMIT=3` reserves one slot for API traffic. Waiting
 API requests take priority over background jobs, with FIFO ordering within each

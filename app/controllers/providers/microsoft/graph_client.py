@@ -63,6 +63,7 @@ ATTACHMENT_SELECT_FIELDS = "id,name,contentType,size,isInline"
 LARGE_ATTACHMENT_THRESHOLD = 3 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 GRAPH_BATCH_SIZE = 20
+GRAPH_BATCH_MAX_ATTEMPTS = 3
 
 # Graph caps mail subscriptions at 10080 minutes (7 days); renew comfortably earlier.
 SUBSCRIPTION_LIFETIME = timedelta(days=6)
@@ -146,48 +147,54 @@ class GraphClient(ProviderClient):
     async def _mark_messages_read(self, account: Account, message_ids: list[str]) -> None:
         for start in range(0, len(message_ids), GRAPH_BATCH_SIZE):
             batch_ids = message_ids[start : start + GRAPH_BATCH_SIZE]
-            response = await self._http.request(
-                account,
-                "POST",
-                f"{GRAPH_API_BASE}/$batch",
-                json_body={
-                    "requests": [
-                        {
-                            "id": str(index),
-                            # One active operation per batch matches its single semaphore slot.
-                            **({"dependsOn": [str(index - 1)]} if index else {}),
-                            "method": "PATCH",
-                            "url": f"/me/messages/{batch_message_id}",
-                            "headers": {"Content-Type": "application/json"},
-                            "body": {"isRead": True},
-                        }
-                        for index, batch_message_id in enumerate(batch_ids)
-                    ]
-                },
-                headers=IMMUTABLE_ID_HEADER,
-            )
-            subresponses = response.get("responses", [])
-            if len(subresponses) != len(batch_ids):
-                raise ProviderError("Microsoft Graph returned an incomplete batch update response.")
-            skipped_ids: list[str] = []
-            for subresponse in subresponses:
-                status_code = int(subresponse.get("status", 500))
-                if 200 <= status_code < 300 or status_code == 404:
-                    continue
-                if status_code == 424:
-                    # A deleted message can break the dependency chain; retry skipped siblings.
-                    skipped_ids.append(batch_ids[int(subresponse["id"])])
-                    continue
-                if status_code == 429:
-                    raise ProviderRateLimitError("Microsoft Graph batch update was rate limited.")
-                raise ProviderError(
-                    f"Microsoft Graph batch update failed ({status_code}).",
-                    status_code=status_code,
+            for _ in range(GRAPH_BATCH_MAX_ATTEMPTS):
+                response = await self._http.request(
+                    account,
+                    "POST",
+                    f"{GRAPH_API_BASE}/$batch",
+                    json_body={
+                        "requests": [
+                            {
+                                "id": str(index),
+                                # One active operation per batch matches its single semaphore slot.
+                                **({"dependsOn": [str(index - 1)]} if index else {}),
+                                "method": "PATCH",
+                                "url": f"/me/messages/{batch_message_id}",
+                                "headers": {"Content-Type": "application/json"},
+                                "body": {"isRead": True},
+                            }
+                            for index, batch_message_id in enumerate(batch_ids)
+                        ]
+                    },
+                    headers=IMMUTABLE_ID_HEADER,
                 )
-            if len(skipped_ids) == len(batch_ids):
-                raise ProviderError("Microsoft Graph batch update made no progress.")
-            if skipped_ids:
-                await self._mark_messages_read(account, skipped_ids)
+                subresponses = response.get("responses", [])
+                if len(subresponses) != len(batch_ids):
+                    raise ProviderError("Microsoft Graph returned an incomplete batch update response.")
+                skipped_ids: list[str] = []
+                for subresponse in subresponses:
+                    status_code = int(subresponse.get("status", 500))
+                    if 200 <= status_code < 300 or status_code == 404:
+                        continue
+                    if status_code == 424:
+                        # A deleted message can break the dependency chain; retry skipped siblings.
+                        skipped_ids.append(batch_ids[int(subresponse["id"])])
+                        continue
+                    if status_code == 429:
+                        raise ProviderRateLimitError("Microsoft Graph batch update was rate limited.")
+                    raise ProviderError(
+                        f"Microsoft Graph batch update failed ({status_code}).",
+                        status_code=status_code,
+                    )
+                if len(skipped_ids) == len(batch_ids):
+                    raise ProviderError("Microsoft Graph batch update made no progress.")
+                if not skipped_ids:
+                    break
+                batch_ids = skipped_ids
+            else:
+                raise ProviderError(
+                    f"Microsoft Graph batch update still has pending messages after {GRAPH_BATCH_MAX_ATTEMPTS} attempts."
+                )
 
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
         if params.page_token:

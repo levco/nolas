@@ -19,7 +19,7 @@ from app.models.account import Account, AccountProvider
 
 
 def _account() -> Account:
-    return Account(email=f"{uuid4()}@example.com", provider=AccountProvider.microsoft)
+    return Account(uuid=uuid4(), email=f"{uuid4()}@example.com", provider=AccountProvider.microsoft)
 
 
 def _limiter(redis: Redis, total: int = 4, workers: int = 3) -> MicrosoftConcurrencyLimiter:
@@ -27,7 +27,7 @@ def _limiter(redis: Redis, total: int = 4, workers: int = 3) -> MicrosoftConcurr
 
 
 @pytest_asyncio.fixture
-async def mailbox():
+async def grant():
     url = os.getenv("REDIS_URL")
     if not url:
         pytest.skip("Set REDIS_URL to run the Redis Lua integration checks")
@@ -43,16 +43,16 @@ async def mailbox():
 
 
 @pytest.mark.asyncio
-async def test_replicas_share_mailbox_capacity_and_reserve_api_slot(mailbox) -> None:
-    redis, account = mailbox
+async def test_replicas_share_grant_capacity_and_reserve_api_slot(grant) -> None:
+    redis, account = grant
     first, second = _limiter(redis), _limiter(redis)
-    same_mailbox = Account(email=account.email.upper(), provider=AccountProvider.microsoft)
+    same_grant = Account(uuid=account.uuid, email="changed@example.com", provider=AccountProvider.microsoft)
     acquired = asyncio.Event()
     release = asyncio.Event()
 
     async def waiting_worker() -> None:
         with microsoft_worker_requests():
-            async with second.acquire(same_mailbox):
+            async with second.acquire(same_grant):
                 acquired.set()
                 await release.wait()
 
@@ -65,7 +65,7 @@ async def test_replicas_share_mailbox_capacity_and_reserve_api_slot(mailbox) -> 
         await asyncio.sleep(0.1)
         assert not acquired.is_set()
         # Fourth slot is still available for API traffic despite a waiting worker.
-        async with second.acquire(same_mailbox):
+        async with second.acquire(same_grant):
             assert await redis.zcard(first._keys(account)[0]) == 1
             assert await redis.zcard(first._keys(account)[1]) == 3
         assert not acquired.is_set()
@@ -76,8 +76,8 @@ async def test_replicas_share_mailbox_capacity_and_reserve_api_slot(mailbox) -> 
 
 
 @pytest.mark.asyncio
-async def test_timeout_and_cancellation_remove_waiters(mailbox) -> None:
-    redis, account = mailbox
+async def test_timeout_and_cancellation_remove_waiters(grant) -> None:
+    redis, account = grant
     limiter = _limiter(redis, total=1, workers=0)
     async with limiter.acquire(account):
         with pytest.raises(ProviderRateLimitError):
@@ -98,8 +98,8 @@ async def test_timeout_and_cancellation_remove_waiters(mailbox) -> None:
 
 
 @pytest.mark.asyncio
-async def test_renewal_and_expired_holder_recovery(mailbox) -> None:
-    redis, account = mailbox
+async def test_renewal_and_expired_holder_recovery(grant) -> None:
+    redis, account = grant
     limiter = _limiter(redis, total=1, workers=0)
     async with limiter.acquire(account):
         await asyncio.sleep(1.2)
@@ -116,8 +116,8 @@ async def test_renewal_and_expired_holder_recovery(mailbox) -> None:
 
 
 @pytest.mark.asyncio
-async def test_waiting_api_requests_take_priority_over_workers(mailbox) -> None:
-    redis, account = mailbox
+async def test_waiting_api_requests_take_priority_over_workers(grant) -> None:
+    redis, account = grant
     limiter = _limiter(redis, total=2, workers=1)
     order = []
 
@@ -145,8 +145,8 @@ async def test_waiting_api_requests_take_priority_over_workers(mailbox) -> None:
 
 
 @pytest.mark.asyncio
-async def test_exception_and_holder_cancellation_release_capacity(mailbox) -> None:
-    redis, account = mailbox
+async def test_exception_and_holder_cancellation_release_capacity(grant) -> None:
+    redis, account = grant
     limiter = _limiter(redis)
     with pytest.raises(ValueError):
         async with limiter.acquire(account):
@@ -167,13 +167,17 @@ async def test_exception_and_holder_cancellation_release_capacity(mailbox) -> No
 
 
 @pytest.mark.asyncio
-async def test_other_mailboxes_are_independent(mailbox) -> None:
-    redis, account = mailbox
-    limiter = _limiter(redis, total=1, workers=0)
+async def test_different_grants_for_same_mailbox_have_independent_capacity(grant) -> None:
+    redis, account = grant
+    limiter = _limiter(redis)
     other = _account()
-    async with limiter.acquire(account), limiter.acquire(other):
-        assert await redis.zcard(limiter._keys(account)[0]) == 1
-        assert await redis.zcard(limiter._keys(other)[0]) == 1
+    other.email = account.email
+    async with AsyncExitStack() as stack:
+        for _ in range(4):
+            await stack.enter_async_context(limiter.acquire(account))
+            await stack.enter_async_context(limiter.acquire(other))
+        assert await redis.zcard(limiter._keys(account)[0]) == 4
+        assert await redis.zcard(limiter._keys(other)[0]) == 4
 
 
 @pytest.mark.asyncio

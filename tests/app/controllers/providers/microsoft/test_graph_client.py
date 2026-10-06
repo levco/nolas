@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.controllers.providers.base import ListMessagesParams, ListThreadsParams
+from app.controllers.providers.exceptions import ProviderError
 
 from app.controllers.providers.microsoft.graph_client import GraphClient
 
@@ -216,4 +217,60 @@ def test_sequential_batch_propagates_rate_limit_without_retrying_dependencies() 
 
     with pytest.raises(ProviderRateLimitError):
         asyncio.run(client._mark_messages_read(account, ["throttled", "sibling"]))
+    assert http.request.await_count == 1
+
+
+@pytest.mark.parametrize("last_status", [200, 404])
+def test_sequential_batch_retries_multiple_deleted_messages_within_limit(last_status: int) -> None:
+    http = SimpleNamespace(
+        request=AsyncMock(
+            side_effect=[
+                {"responses": [{"id": "0", "status": 404}, {"id": "1", "status": 424}, {"id": "2", "status": 424}]},
+                {"responses": [{"id": "0", "status": 404}, {"id": "1", "status": 424}]},
+                {"responses": [{"id": "0", "status": last_status}]},
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    asyncio.run(client._mark_messages_read(account, ["deleted-1", "deleted-2", "last"]))
+
+    assert http.request.await_count == 3
+    assert [
+        [request["url"] for request in call.kwargs["json_body"]["requests"]] for call in http.request.await_args_list
+    ] == [
+        ["/me/messages/deleted-1", "/me/messages/deleted-2", "/me/messages/last"],
+        ["/me/messages/deleted-2", "/me/messages/last"],
+        ["/me/messages/last"],
+    ]
+
+
+def test_sequential_batch_stops_after_three_attempts_with_pending_messages() -> None:
+    http = SimpleNamespace(
+        request=AsyncMock(
+            side_effect=[
+                {"responses": [{"id": str(i), "status": 404 if i == 0 else 424} for i in range(size)]}
+                for size in [4, 3, 2]
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    with pytest.raises(ProviderError, match="pending messages after 3 attempts") as error:
+        asyncio.run(client._mark_messages_read(account, ["deleted-1", "deleted-2", "deleted-3", "last"]))
+
+    assert error.value.status_code == 502
+    assert http.request.await_count == 3
+
+
+def test_sequential_batch_rejects_retry_without_progress() -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"responses": [{"id": "0", "status": 424}]}))
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    with pytest.raises(ProviderError, match="no progress"):
+        asyncio.run(client._mark_messages_read(account, ["message-1"]))
+
     assert http.request.await_count == 1

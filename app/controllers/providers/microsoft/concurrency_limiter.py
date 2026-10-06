@@ -1,4 +1,4 @@
-"""Redis mailbox capacity shared by all Nolas API and worker processes.
+"""Redis grant capacity shared by all Nolas API and worker processes.
 
 The Lua scripts are adapted from email-service's MicrosoftConcurrencyLimiter.
 Nolas uses its own namespace because email-service can hold a lease while calling us.
@@ -126,9 +126,8 @@ return 0
         self._waiter_ttl_ms = max(acquire_timeout_seconds * 2, lease_seconds) * 1000
 
     def _keys(self, account: Account) -> tuple[str, str, str, str]:
-        # A mailbox can have multiple grants/apps. They must share the same capacity.
-        mailbox_hash = hashlib.sha256(account.email.strip().lower().encode()).hexdigest()
-        prefix = f"nolas:microsoft-concurrency:{{{mailbox_hash}}}"
+        grant_hash = hashlib.sha256(str(account.uuid).encode()).hexdigest()
+        prefix = f"nolas:microsoft-concurrency:{{{grant_hash}}}"
         return (
             f"{prefix}:mailbox-holders",
             f"{prefix}:worker-holders",
@@ -158,9 +157,9 @@ return 0
                     async with asyncio.timeout(self._lease_ms / 3000):
                         renewed = await self._redis.eval(self._RENEW_SCRIPT, 2, *keys[:2], token, self._lease_ms)
                     if renewed != 1:
-                        raise ProviderError("Lost Microsoft mailbox concurrency lease.", status_code=503)
+                        raise ProviderError("Lost Microsoft grant concurrency lease.", status_code=503)
             except (RedisError, ProviderError, TimeoutError):
-                lease_error = ProviderError("Could not maintain Microsoft mailbox concurrency lease.", status_code=503)
+                lease_error = ProviderError("Could not maintain Microsoft grant concurrency lease.", status_code=503)
                 logger.warning("Microsoft concurrency lease lost; cancelling request", exc_info=True)
                 owner.cancel()
 
@@ -180,9 +179,9 @@ return 0
                     ):
                         await asyncio.sleep(0.05)
             except TimeoutError as exc:
-                raise ProviderRateLimitError("Timed out waiting for Microsoft mailbox concurrency capacity.") from exc
+                raise ProviderRateLimitError("Timed out waiting for Microsoft grant concurrency capacity.") from exc
             except RedisError as exc:
-                raise ProviderError("Microsoft mailbox concurrency limiter unavailable.", status_code=503) from exc
+                raise ProviderError("Microsoft grant concurrency limiter unavailable.", status_code=503) from exc
 
             renewal = asyncio.create_task(renew(), name="microsoft-lease-renewal")
             try:
