@@ -44,7 +44,7 @@ Nolas uses separate keys from email-service to avoid nesting the same semaphore
 when email-service calls Nolas. The two services do not share a combined limit.
 
 Run the limiter's integration checks against a test Redis instance with
-`REDIS_TEST_URL=redis://localhost:6379/15 uv run pytest tests/app/controllers/providers/microsoft/test_concurrency_limiter.py`.
+`REDIS_URL=redis://localhost:6379/0 uv run pytest tests/app/controllers/providers/microsoft/test_concurrency_limiter.py`.
 
 ## 🛠 Installation
 

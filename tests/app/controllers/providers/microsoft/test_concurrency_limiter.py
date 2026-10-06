@@ -28,9 +28,9 @@ def _limiter(redis: Redis, total: int = 4, workers: int = 3) -> MicrosoftConcurr
 
 @pytest_asyncio.fixture
 async def mailbox():
-    url = os.getenv("REDIS_TEST_URL")
+    url = os.getenv("REDIS_URL")
     if not url:
-        pytest.skip("Set REDIS_TEST_URL to run the Redis Lua integration checks")
+        pytest.skip("Set REDIS_URL to run the Redis Lua integration checks")
     redis = Redis.from_url(url, socket_timeout=1, socket_connect_timeout=1)
     account = _account()
     limiter = _limiter(redis)
