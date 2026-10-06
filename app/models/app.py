@@ -18,3 +18,5 @@ class App(Base, WithUUID, TimestampMixin):
     )
     gmail_client_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     gmail_client_secret: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    microsoft_client_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    microsoft_client_secret: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)

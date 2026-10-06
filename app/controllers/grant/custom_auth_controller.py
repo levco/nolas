@@ -83,9 +83,7 @@ class CustomAuthController:
 
         return account
 
-    async def update_grant_refresh_token(
-        self, account: Account, refresh_token: str, app: App | None = None
-    ) -> Account:
+    async def update_grant_refresh_token(self, app: App, account: Account, refresh_token: str) -> Account:
         token_payload = await self._token_service.validate_refresh_token(account.provider, refresh_token, app)
         effective_refresh_token = token_payload.get("refresh_token") or refresh_token
 
