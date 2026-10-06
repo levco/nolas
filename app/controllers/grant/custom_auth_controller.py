@@ -74,6 +74,8 @@ class CustomAuthController:
             )
             await self._account_repo.add(account)
         account.app = app
+        # Microsoft token refresh reloads the account during subscription setup.
+        await self._account_repo.flush()
 
         # Best-effort: the renewal worker heals missing watches/subscriptions.
         try:
@@ -107,6 +109,8 @@ class CustomAuthController:
             },
             do_commit=False,
         )
+        # Preserve the new status and credentials before token refresh reloads the account.
+        await self._account_repo.flush()
         try:
             await self._subscription_manager.ensure_subscription(account)
         except Exception:
