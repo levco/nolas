@@ -5,7 +5,9 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.controllers.providers.base import ListThreadsParams
+import pytest
+
+from app.controllers.providers.base import ListMessagesParams, ListThreadsParams
 
 # The concrete HTTP client pulls in application repository dependencies that are
 # unrelated to this provider unit test.
@@ -39,7 +41,48 @@ def test_list_threads_requests_newest_messages_first() -> None:
 
     query = http.request.await_args.kwargs["params"]
     assert query["$orderby"] == "receivedDateTime desc"
-    assert query["$filter"].startswith("receivedDateTime ne null and ")
+    assert query["$filter"] == "receivedDateTime ge 1900-01-01T00:00:00Z and isDraft eq false"
+
+
+@pytest.mark.parametrize("native_query", ["matt", "subject:invoice", "from:matt@example.com"])
+def test_list_threads_routes_mailbox_text_to_search(native_query: str) -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    asyncio.run(client.list_threads(account, ListThreadsParams(search_query_native=native_query)))
+
+    query = http.request.await_args.kwargs["params"]
+    assert query["$search"] == f'"{native_query}"'
+    assert "$filter" not in query
+    assert "$orderby" not in query
+
+
+@pytest.mark.parametrize("prefix", ["", "$filter="])
+def test_list_messages_preserves_native_crawling_filter(prefix: str) -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+    native_filter = "receivedDateTime ge 2024-01-01T00:00:00Z"
+
+    asyncio.run(client.list_messages(account, ListMessagesParams(search_query_native=prefix + native_filter)))
+
+    query = http.request.await_args.kwargs["params"]
+    assert query["$filter"] == native_filter
+    assert "$search" not in query
+
+
+def test_list_threads_accepts_nylas_native_filter() -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+    native_filter = "from/emailAddress/address eq 'matt@example.com'"
+
+    asyncio.run(client.list_threads(account, ListThreadsParams(search_query_native="$filter=" + native_filter)))
+
+    query = http.request.await_args.kwargs["params"]
+    assert query["$filter"] == f"receivedDateTime ge 1900-01-01T00:00:00Z and {native_filter}"
+    assert "$search" not in query
 
 
 def test_list_threads_filters_on_latest_message_unread_state() -> None:

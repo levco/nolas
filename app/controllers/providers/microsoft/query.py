@@ -11,11 +11,11 @@ def _iso(epoch: int) -> str:
 def build_graph_filter(params: ListMessagesParams) -> str | None:
     """Translate Nylas messages.list params to a Microsoft Graph $filter expression.
 
-    search_query_native is passed through verbatim (it is already a Graph $filter,
-    matching how lev-email-service uses it against Nylas today).
+    Message crawling passes a Graph $filter, optionally prefixed with $filter=
+    as in the Nylas API. Thread text searches use $search separately.
     """
     if params.search_query_native:
-        return params.search_query_native
+        return params.search_query_native.removeprefix("$filter=")
 
     clauses: list[str] = ["isDraft eq false"]
 

@@ -264,7 +264,12 @@ class GraphClient(ProviderClient):
             "$select": THREAD_MESSAGE_SELECT_FIELDS,
         }
 
-        search = build_graph_search(params)
+        # Nylas supports native thread search and explicit $filter= queries.
+        native_query = params.search_query_native
+        if native_query and native_query.startswith("$filter="):
+            search = None
+        else:
+            search = native_query or build_graph_search(params)
         if search:
             # $search cannot be combined with $filter/$orderby. Graph returns
             # message search results newest-first by received date.
@@ -273,8 +278,9 @@ class GraphClient(ProviderClient):
             graph_filter = build_graph_filter(params)
             if graph_filter:
                 # Graph requires a property used by $orderby to also appear in
-                # $filter, before any other filtered properties.
-                query["$filter"] = f"receivedDateTime ne null and {graph_filter}"
+                # $filter, before any other filtered properties. Use a concrete
+                # date because Graph rejects null comparisons for receivedDateTime.
+                query["$filter"] = f"receivedDateTime ge 1900-01-01T00:00:00Z and {graph_filter}"
             query["$orderby"] = "receivedDateTime desc"
 
         return await self._http.request(  # type: ignore

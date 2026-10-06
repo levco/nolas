@@ -54,7 +54,7 @@ class ListThreadsParams:
     unread: bool | None = None
     starred: bool | None = None
     has_attachment: bool | None = None
-    # Provider-native query (Microsoft Graph $filter / Gmail q) passed through verbatim.
+    # Provider-native search (Microsoft Graph $search or $filter= / Gmail q).
     search_query_native: str | None = None
 
 
