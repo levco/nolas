@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import sys
+from functools import partial
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -22,7 +23,7 @@ load_dotenv("./.env", override=True)
 
 import sentry_sdk
 
-from app.container import get_wire_container
+from app.container import close_controller_resources, get_wire_container
 from app.db import fastapi_sqlalchemy_context
 from logging_config import setup_logging
 from settings import settings
@@ -97,7 +98,6 @@ async def main() -> None:
     for sig in [signal.SIGINT, signal.SIGTERM]:
         signal.signal(sig, lambda s, f: signal_handler())
 
-    token_service = container.controllers.token_service()
     concurrency = settings.job_processor.concurrency
 
     async with fastapi_sqlalchemy_context():
@@ -110,11 +110,7 @@ async def main() -> None:
                 name=f"job-processor-{idx}",
             )
             task.add_done_callback(
-                lambda completed_task, wid=worker_id: _handle_worker_task_done(
-                    completed_task,
-                    wid,
-                    shutdown_event,
-                )
+                partial(_handle_worker_task_done, worker_id=worker_id, shutdown_event=shutdown_event)
             )
             worker_tasks.append(task)
 
@@ -124,7 +120,7 @@ async def main() -> None:
                 task.cancel()
         await asyncio.gather(*worker_tasks, return_exceptions=True)
 
-    await token_service.close()
+    await close_controller_resources(container)
 
 
 if __name__ == "__main__":

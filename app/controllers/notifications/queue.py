@@ -9,6 +9,7 @@ from fastapi_async_sqlalchemy import db
 from app.controllers.notifications.incoming_controller import (
     IncomingNotificationController,
 )
+from app.controllers.providers.microsoft.concurrency_limiter import microsoft_worker_requests
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,9 @@ class NotificationQueue:
         while True:
             job = await self._queue.get()
             try:
-                async with self._session_context():
-                    await self._process(job)
+                with microsoft_worker_requests():
+                    async with self._session_context():
+                        await self._process(job)
             except asyncio.CancelledError:
                 raise
             except Exception:

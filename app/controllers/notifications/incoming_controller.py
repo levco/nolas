@@ -172,10 +172,9 @@ class IncomingNotificationController:
             return
 
         change_type = notification.get("changeType")
-        event_type = {
-            "created": "message.created",
-            "updated": "message.updated",
-        }.get(change_type if isinstance(change_type, str) else "")
+        event_type = {"created": "message.created", "updated": "message.updated"}.get(
+            change_type if isinstance(change_type, str) else ""
+        )
         if event_type is None:
             logger.debug(f"Ignoring unsupported Graph message change type: {change_type}")
             return
@@ -193,6 +192,7 @@ class IncomingNotificationController:
             logger.warning(f"Auth failure processing Graph notification for {account.email}")
         except Exception:
             logger.exception(f"Failed to process Graph notification for {account.email}")
+            raise
 
     # --- Shared ---
 
@@ -209,6 +209,8 @@ class IncomingNotificationController:
         except ProviderNotFoundError:
             return
         except ProviderError as e:
+            if provider == AccountProvider.microsoft and (e.status_code == 429 or e.status_code >= 500):
+                raise
             logger.warning(f"Could not fetch message {message_id} for {account.email}: {e.message}")
             return
         if message is None:

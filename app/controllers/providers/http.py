@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import nullcontext
 from typing import Any
 
 import aiohttp
@@ -11,6 +12,7 @@ from app.controllers.providers.exceptions import (
     ProviderRateLimitError,
 )
 from app.controllers.providers.token_service import TokenService
+from app.controllers.providers.microsoft.concurrency_limiter import MicrosoftConcurrencyLimiter
 from app.models.account import Account
 
 logger = logging.getLogger(__name__)
@@ -23,11 +25,17 @@ class AuthorizedHttpClient:
     the grant expired (webhook + status) and raises ProviderAuthError.
     """
 
-    def __init__(self, token_service: TokenService, timeout: int) -> None:
+    def __init__(
+        self,
+        token_service: TokenService,
+        timeout: int,
+        concurrency_limiter: MicrosoftConcurrencyLimiter | None = None,
+    ) -> None:
         self._token_service = token_service
         self._timeout = timeout
         self._http_session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
+        self._concurrency_limiter = concurrency_limiter
 
     async def _get_session(self) -> aiohttp.ClientSession:
         async with self._session_lock:
@@ -65,9 +73,13 @@ class AuthorizedHttpClient:
             if include_auth:
                 request_headers = {"Authorization": f"Bearer {access_token}", **request_headers}
             session = await self._get_session()
-            async with session.request(
-                method, url, params=params, json=json_body, data=data, headers=request_headers
-            ) as response:
+            capacity = self._concurrency_limiter.acquire(account) if self._concurrency_limiter else nullcontext()
+            async with (
+                capacity,
+                session.request(
+                    method, url, params=params, json=json_body, data=data, headers=request_headers
+                ) as response,
+            ):
                 if response.status == 401 and attempt == 1 and include_auth:
                     try:
                         access_token = await self._token_service.get_access_token(account, force_refresh=True)

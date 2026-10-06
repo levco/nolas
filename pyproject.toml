@@ -29,6 +29,7 @@ dependencies = [
     "dnspython>=2.8.0",
     "google-auth>=2.55.0",
     "cachecontrol>=0.14.4",
+    "redis>=5.0,<9",
 ]
 
 [project.optional-dependencies]

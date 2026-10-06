@@ -3,7 +3,8 @@ FastAPI application entry point - Nylas-compatible API
 """
 
 import logging
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
@@ -12,7 +13,7 @@ from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 
 from app.api.middlewares.auto_commit import AutoCommitMiddleware
 from app.api.routes import api_router
-from app.container import ApplicationContainer
+from app.container import ApplicationContainer, close_controller_resources
 from app.environment import EnvironmentName
 from app.exceptions import BaseError, ErrorType
 from settings import settings
@@ -52,7 +53,16 @@ def _setup_error_handlers(app: FastAPI) -> None:
 
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     """Create and configure FastAPI application."""
-    app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        try:
+            yield
+        finally:
+            if container is not None:
+                await close_controller_resources(container)
+
+    app = FastAPI(title="Nolas API", description="Nylas-compatible email API", version="1.0.0", lifespan=lifespan)
 
     # Configure OpenAPI security scheme for Bearer token
     def custom_openapi() -> dict[str, Any]:
