@@ -7,7 +7,7 @@ import pytest
 
 from app.controllers.jobs.processor import JobProcessorController
 from app.models.account import AccountProvider, AccountStatus
-from app.models.job import Job, JobType
+from app.models.job import Job, JobStatus, JobType
 from settings import settings
 
 
@@ -23,11 +23,52 @@ def _make_controller() -> tuple[JobProcessorController, AsyncMock, AsyncMock, As
         subscription_manager=subscription_manager,
         account_repo=account_repo,
         webhook_sender=webhook_sender,
+        renewal_alerts=AsyncMock(),
     )
     return controller, job_repo, incoming_notification_controller, subscription_manager, account_repo, webhook_sender
 
 
 class TestJobProcessorController:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "job_type,attempts,should_alert",
+        [
+            (JobType.subscription_renewal, 3, False),
+            (JobType.subscription_renewal, 4, True),
+            (JobType.webhook_delivery, 4, False),
+        ],
+    )
+    async def test_alerts_only_after_exhausted_renewal_is_committed(self, job_type, attempts, should_alert) -> None:
+        controller, job_repo, _, _, _, _ = _make_controller()
+        alerts = AsyncMock()
+        controller._renewal_alerts = alerts
+        controller._dispatch = AsyncMock(side_effect=RuntimeError("provider unavailable"))
+        job = Job(
+            id=50,
+            type=job_type,
+            status=JobStatus.processing,
+            payload={"account_id": 123},
+            attempts=attempts,
+            max_attempts=5,
+        )
+        job_repo.requeue_stale_processing.return_value = 0
+        job_repo.claim_batch.return_value = [job]
+
+        async def mark_failed(job, error, retry_delay_seconds):
+            job.attempts += 1
+            job.status = JobStatus.failed if job.attempts == job.max_attempts else JobStatus.pending
+
+        async def alert_after_commit(job):
+            job_repo.commit.assert_awaited_once()
+
+        job_repo.mark_retry_or_failed.side_effect = mark_failed
+        alerts.record_failure.side_effect = alert_after_commit
+        assert await controller.process_available_jobs("worker", 5, 60) == 1
+        if should_alert:
+            alerts.record_failure.assert_awaited_once_with(job)
+        else:
+            alerts.record_failure.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_enqueues_google_notification_lowercasing_email(self) -> None:
         controller, job_repo, _, _, account_repo, _ = _make_controller()
@@ -197,6 +238,7 @@ class TestJobProcessorController:
             SimpleNamespace(
                 id=19,
                 type=JobType.subscription_renewal,
+                status=JobStatus.pending,
                 payload={"account_id": 123},
                 attempts=0,
                 max_attempts=5,

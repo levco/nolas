@@ -12,11 +12,12 @@ from app.controllers.notifications.incoming_controller import (
     IncomingNotificationController,
 )
 from app.controllers.notifications.subscription_manager import SubscriptionManager
+from app.controllers.notifications.renewal_alerts import RenewalAlerts
 from app.controllers.webhooks.sender import WebhookSender
 from app.controllers.providers.microsoft.concurrency_limiter import microsoft_worker_requests
 from app.exceptions import WebhookDeliveryError
 from app.models.account import AccountProvider, AccountStatus
-from app.models.job import Job, JobType
+from app.models.job import Job, JobStatus, JobType
 from app.repos.account import AccountRepo
 from app.repos.job import JobRepo
 from settings import settings
@@ -34,12 +35,14 @@ class JobProcessorController:
         subscription_manager: SubscriptionManager,
         account_repo: AccountRepo,
         webhook_sender: WebhookSender,
+        renewal_alerts: RenewalAlerts,
     ) -> None:
         self._job_repo = job_repo
         self._incoming_notification_controller = incoming_notification_controller
         self._subscription_manager = subscription_manager
         self._account_repo = account_repo
         self._webhook_sender = webhook_sender
+        self._renewal_alerts = renewal_alerts
 
     async def enqueue_google_notification(self, email_address: str, history_id: str) -> Job | None:
         normalized_email = email_address.lower()
@@ -103,6 +106,8 @@ class JobProcessorController:
             await self._process_one(job)
             # Release transaction-scoped advisory locks promptly (per account/job).
             await self._job_repo.commit()
+            if job.type == JobType.subscription_renewal and job.status == JobStatus.failed:
+                await self._renewal_alerts.record_failure(job)
 
         return len(jobs)
 

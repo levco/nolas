@@ -109,6 +109,14 @@ class SubscriptionRenewalSettings(BaseSettings):
     check_interval_hours: int = Field(alias="SUBSCRIPTION_RENEWAL_CHECK_INTERVAL_HOURS", default=6, ge=1)
 
 
+class SlackSettings(BaseSettings):
+    bot_token: str = Field(alias="SLACK_BOT_TOKEN", default="")
+    renewal_alert_channel_id: str = Field(alias="SLACK_RENEWAL_ALERT_CHANNEL_ID", default="")
+    renewal_failure_threshold: int = Field(alias="SLACK_RENEWAL_FAILURE_THRESHOLD", default=5, ge=1)
+    renewal_failure_window_seconds: int = Field(alias="SLACK_RENEWAL_FAILURE_WINDOW_SECONDS", default=1800, ge=1)
+    renewal_alert_cooldown_seconds: int = Field(alias="SLACK_RENEWAL_ALERT_COOLDOWN_SECONDS", default=600, ge=1)
+
+
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "allow"}
 
@@ -126,6 +134,7 @@ class Settings(BaseSettings):
     microsoft: MicrosoftProviderSettings = Field(default_factory=MicrosoftProviderSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     subscription_renewal: SubscriptionRenewalSettings = Field(default_factory=SubscriptionRenewalSettings)
+    slack: SlackSettings = Field(default_factory=SlackSettings)
     retention: RetentionSettings = Field(default_factory=RetentionSettings)
     notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)
     job_processor: JobProcessorSettings = Field(default_factory=JobProcessorSettings)
