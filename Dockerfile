@@ -10,6 +10,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.6 /uv /bin/uv
 WORKDIR /virtualenv
 COPY pyproject.toml uv.lock ./
 
+RUN mkdir -p -m 0600 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
 RUN echo "Environment: ${ENV}"
 RUN --mount=type=ssh \
     if [ "$ENV" = "dev" ]; then \

@@ -47,6 +47,28 @@ when email-service calls Nolas. The two services do not share a combined limit.
 Run the limiter's integration checks against a test Redis instance with
 `REDIS_URL=redis://localhost:6379/0 uv run pytest tests/app/controllers/providers/microsoft/test_concurrency_limiter.py`.
 
+## Subscription renewal Slack alerts
+
+Set `SLACK_BOT_TOKEN` (the shared Lev bot) and `SLACK_RENEWAL_ALERT_CHANNEL_ID`
+on Nolas workers to enable renewal alerts. Add the bot to private channels manually.
+Without both settings, alerts are disabled.
+
+An alert fires when five subscription renewal jobs exhaust their retries within
+thirty minutes. Retryable failures and successful Microsoft subscription recreation
+do not count. Counts and cooldowns are shared across replicas using `REDIS_URL`,
+with separate keys per environment. Messages include the latest job and account
+IDs; detailed errors remain in worker logs and `jobs.last_error`.
+
+Optional settings (all positive integers):
+
+- `SLACK_RENEWAL_FAILURE_THRESHOLD` (default `5`)
+- `SLACK_RENEWAL_FAILURE_WINDOW_SECONDS` (default `1800`)
+- `SLACK_RENEWAL_ALERT_COOLDOWN_SECONDS` (default `600`)
+
+Slack/Redis alerting failures are logged without interrupting job processing.
+A failed Slack send retains the cooldown; a subsequent exhausted renewal can
+trigger another alert after it expires. Alert delivery is best effort.
+
 ## 🛠 Installation
 
 1. **Clone the repository**:

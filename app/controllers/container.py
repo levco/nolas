@@ -1,6 +1,7 @@
 from typing import cast
 
 from dependency_injector import containers, providers
+from lev.services.slack import Slack
 from redis.asyncio import Redis
 
 from app.controllers.email.email_controller import EmailController
@@ -14,6 +15,7 @@ from app.controllers.imap.message_controller import MessageController
 from app.controllers.jobs.processor import JobProcessorController
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.controllers.notifications.queue import NotificationQueue
+from app.controllers.notifications.renewal_alerts import RenewalAlerts
 from app.controllers.notifications.subscription_manager import SubscriptionManager
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.http import AuthorizedHttpClient
@@ -145,6 +147,9 @@ class ControllerContainer(containers.DeclarativeContainer):
         maxsize=settings.notification_queue.maxsize,
     )
 
+    slack_client: providers.Singleton[Slack] = providers.Singleton(Slack, bot_token=settings.slack.bot_token)
+    renewal_alerts = providers.Singleton(RenewalAlerts, redis=redis_client, slack=slack_client)
+
     job_processor = providers.Singleton(
         JobProcessorController,
         job_repo=repos.job,
@@ -152,4 +157,5 @@ class ControllerContainer(containers.DeclarativeContainer):
         subscription_manager=subscription_manager,
         account_repo=repos.account,
         webhook_sender=webhook_sender,
+        renewal_alerts=renewal_alerts,
     )

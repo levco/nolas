@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "lev",
     "imapclient>=3.0.1",
     "requests>=2.32.4",
     "asyncpg>=0.29.0",
@@ -31,6 +32,9 @@ dependencies = [
     "cachecontrol>=0.14.4",
     "redis>=5.0,<9",
 ]
+
+[tool.uv.sources]
+lev = { git = "ssh://git@github.com/levco/lev-common.git", rev = "4.8.3" }
 
 [project.optional-dependencies]
 dev = [
