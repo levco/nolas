@@ -1,7 +1,7 @@
 import asyncio
 import os
 from contextlib import AsyncExitStack
-from types import SimpleNamespace
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -10,7 +10,7 @@ import pytest_asyncio
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
 
-from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
+from app.controllers.providers.exceptions import ProviderRateLimitError
 from app.controllers.providers.microsoft.concurrency_limiter import (
     MicrosoftConcurrencyLimiter,
     microsoft_worker_requests,
@@ -27,7 +27,7 @@ def _limiter(redis: Redis, total: int = 4, workers: int = 3) -> MicrosoftConcurr
 
 
 @pytest_asyncio.fixture
-async def grant():
+async def grant() -> AsyncGenerator[tuple[Redis, Account], None]:
     url = os.getenv("REDIS_URL")
     if not url:
         pytest.skip("Set REDIS_URL to run the Redis Lua integration checks")
@@ -43,7 +43,7 @@ async def grant():
 
 
 @pytest.mark.asyncio
-async def test_replicas_share_grant_capacity_and_reserve_api_slot(grant) -> None:
+async def test_replicas_share_grant_capacity_and_reserve_api_slot(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     first, second = _limiter(redis), _limiter(redis)
     same_grant = Account(uuid=account.uuid, email="changed@example.com", provider=AccountProvider.microsoft)
@@ -76,7 +76,7 @@ async def test_replicas_share_grant_capacity_and_reserve_api_slot(grant) -> None
 
 
 @pytest.mark.asyncio
-async def test_timeout_and_cancellation_remove_waiters(grant) -> None:
+async def test_timeout_and_cancellation_remove_waiters(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     limiter = _limiter(redis, total=1, workers=0)
     async with limiter.acquire(account):
@@ -98,7 +98,7 @@ async def test_timeout_and_cancellation_remove_waiters(grant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_renewal_and_expired_holder_recovery(grant) -> None:
+async def test_renewal_and_expired_holder_recovery(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     limiter = _limiter(redis, total=1, workers=0)
     async with limiter.acquire(account):
@@ -116,12 +116,12 @@ async def test_renewal_and_expired_holder_recovery(grant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_waiting_api_requests_take_priority_over_workers(grant) -> None:
+async def test_waiting_api_requests_take_priority_over_workers(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     limiter = _limiter(redis, total=2, workers=1)
     order = []
 
-    async def request(name, worker=False) -> None:
+    async def request(name: str, worker: bool = False) -> None:
         if worker:
             with microsoft_worker_requests():
                 async with limiter.acquire(account):
@@ -145,7 +145,7 @@ async def test_waiting_api_requests_take_priority_over_workers(grant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_exception_and_holder_cancellation_release_capacity(grant) -> None:
+async def test_exception_and_holder_cancellation_release_capacity(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     limiter = _limiter(redis)
     with pytest.raises(ValueError):
@@ -167,7 +167,7 @@ async def test_exception_and_holder_cancellation_release_capacity(grant) -> None
 
 
 @pytest.mark.asyncio
-async def test_different_grants_for_same_mailbox_have_independent_capacity(grant) -> None:
+async def test_different_grants_for_same_mailbox_have_independent_capacity(grant: tuple[Redis, Account]) -> None:
     redis, account = grant
     limiter = _limiter(redis)
     other = _account()
@@ -181,30 +181,76 @@ async def test_different_grants_for_same_mailbox_have_independent_capacity(grant
 
 
 @pytest.mark.asyncio
-async def test_redis_failure_does_not_bypass_limit() -> None:
+async def test_redis_failure_bypasses_limit_and_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
     redis = AsyncMock()
     redis.eval.side_effect = ConnectionError("offline")
-    with pytest.raises(ProviderError) as error:
-        async with _limiter(redis).acquire(_account()):
-            pytest.fail("request must not proceed without Redis")
-    assert error.value.status_code == 503
+    async with _limiter(redis).acquire(_account()):
+        assert redis.eval.await_count == 1
+    assert "Redis unavailable; bypassing Microsoft grant concurrency limiter" in caplog.text
+    assert any(record.exc_info for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_lease_loss_cancels_active_request() -> None:
+async def test_bypassed_request_errors_still_propagate() -> None:
     redis = AsyncMock()
-    redis.eval.side_effect = [1, 0, 1]
-    with pytest.raises(ProviderError) as error:
+    redis.eval.side_effect = ConnectionError("offline")
+    with pytest.raises(ConnectionError, match="request failed"):
         async with _limiter(redis).acquire(_account()):
-            await asyncio.sleep(2)
-    assert error.value.status_code == 503
+            raise ConnectionError("request failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["connection", "timeout"])
+async def test_renewal_failure_logs_warning_and_recovers_without_cancelling_request(
+    failure: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    redis = AsyncMock()
+    limiter = _limiter(redis)
+    recovered = asyncio.Event()
+    renewals = 0
+
+    async def eval_script(script: str, *args: object) -> int:
+        nonlocal renewals
+        if script == limiter._RENEW_SCRIPT:
+            renewals += 1
+            if renewals == 1:
+                if failure == "connection":
+                    raise ConnectionError("offline")
+                await asyncio.Event().wait()
+            recovered.set()
+        return 1
+
+    redis.eval.side_effect = eval_script
+    async with limiter.acquire(_account()):
+        await asyncio.wait_for(recovered.wait(), timeout=2)
+    assert renewals >= 2
+    assert "Could not renew Microsoft concurrency lease; request will continue" in caplog.text
+    assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_lease_loss_logs_and_allows_active_request_to_finish(caplog: pytest.LogCaptureFixture) -> None:
+    redis = AsyncMock()
+    limiter = _limiter(redis)
+    lease_lost = asyncio.Event()
+
+    async def eval_script(script: str, *args: object) -> int:
+        if script == limiter._RENEW_SCRIPT:
+            lease_lost.set()
+            return 0
+        return 1
+
+    redis.eval.side_effect = eval_script
+    async with limiter.acquire(_account()):
+        await asyncio.wait_for(lease_lost.wait(), timeout=1)
+    assert "Lost Microsoft concurrency lease; request will continue" in caplog.text
     assert redis.eval.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_google_bypasses_redis_and_priority_resets() -> None:
     redis = AsyncMock()
-    account = SimpleNamespace(provider=AccountProvider.google)
+    account = Account(provider=AccountProvider.google)
     with microsoft_worker_requests():
         async with _limiter(redis).acquire(account):
             pass
@@ -212,6 +258,6 @@ async def test_google_bypasses_redis_and_priority_resets() -> None:
 
 
 @pytest.mark.parametrize("total,workers", [(0, 0), (3, 3), (3, -1), (5, 3)])
-def test_invalid_limits_are_rejected(total, workers) -> None:
+def test_invalid_limits_are_rejected(total: int, workers: int) -> None:
     with pytest.raises(ValueError):
         _limiter(AsyncMock(), total=total, workers=workers)

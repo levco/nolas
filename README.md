@@ -37,9 +37,11 @@ within each batch so each batch consumes only one concurrency slot.
 
 `MICROSOFT_CONCURRENCY_LEASE_SECONDS=30` controls crash recovery; active requests
 renew their leases. `MICROSOFT_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS=30` bounds
-waiting for capacity, returning a provider 429 on timeout. If Redis is unavailable
-or a lease cannot be renewed, the request fails with a provider 503 so it can be
-retried without bypassing the limit. Google and IMAP requests are unaffected.
+waiting for capacity, returning a provider 429 on timeout. If Redis is unavailable,
+requests bypass the limiter and log a warning. Renewal failures or lost leases
+also allow active requests to finish. The concurrency cap is temporarily
+unenforced during these failures, matching email-service. Failed cleanup is
+recovered through lease/waiter expiration. Google and IMAP requests are unaffected.
 
 Nolas uses separate keys from email-service to avoid nesting the same semaphore
 when email-service calls Nolas. The two services do not share a combined limit.

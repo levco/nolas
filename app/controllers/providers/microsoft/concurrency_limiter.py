@@ -15,7 +15,7 @@ from uuid import uuid4
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
+from app.controllers.providers.exceptions import ProviderRateLimitError
 from app.models.account import Account, AccountProvider
 
 logger = logging.getLogger(__name__)
@@ -145,23 +145,19 @@ return 0
         priority = "worker" if _worker_request.get() else "mailbox"
         token = f"{priority}:{uuid4()}"
         renewal: asyncio.Task[None] | None = None
-        lease_error: ProviderError | None = None
-        owner = asyncio.current_task()
-        assert owner is not None
 
         async def renew() -> None:
-            nonlocal lease_error
-            try:
-                while True:
-                    await asyncio.sleep(self._lease_ms / 3000)
+            while True:
+                await asyncio.sleep(self._lease_ms / 3000)
+                try:
                     async with asyncio.timeout(self._lease_ms / 3000):
                         renewed = await self._redis.eval(self._RENEW_SCRIPT, 2, *keys[:2], token, self._lease_ms)
-                    if renewed != 1:
-                        raise ProviderError("Lost Microsoft grant concurrency lease.", status_code=503)
-            except (RedisError, ProviderError, TimeoutError):
-                lease_error = ProviderError("Could not maintain Microsoft grant concurrency lease.", status_code=503)
-                logger.warning("Microsoft concurrency lease lost; cancelling request", exc_info=True)
-                owner.cancel()
+                except (RedisError, TimeoutError):
+                    logger.warning("Could not renew Microsoft concurrency lease; request will continue", exc_info=True)
+                    continue
+                if renewed != 1:
+                    logger.error("Lost Microsoft concurrency lease; request will continue")
+                    return
 
         try:
             try:
@@ -180,17 +176,11 @@ return 0
                         await asyncio.sleep(0.05)
             except TimeoutError as exc:
                 raise ProviderRateLimitError("Timed out waiting for Microsoft grant concurrency capacity.") from exc
-            except RedisError as exc:
-                raise ProviderError("Microsoft grant concurrency limiter unavailable.", status_code=503) from exc
-
-            renewal = asyncio.create_task(renew(), name="microsoft-lease-renewal")
-            try:
-                yield
-            except asyncio.CancelledError:
-                if lease_error is not None:
-                    owner.uncancel()
-                    raise lease_error
-                raise
+            except RedisError:
+                logger.warning("Redis unavailable; bypassing Microsoft grant concurrency limiter", exc_info=True)
+            else:
+                renewal = asyncio.create_task(renew(), name="microsoft-lease-renewal")
+            yield
         finally:
             if renewal is not None:
                 renewal.cancel()

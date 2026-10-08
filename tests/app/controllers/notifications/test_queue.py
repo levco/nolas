@@ -39,11 +39,10 @@ class TestNotificationQueue:
         "error",
         [
             ProviderRateLimitError("Timed out waiting for Microsoft grant concurrency capacity."),
-            ProviderError("Microsoft grant concurrency limiter unavailable.", status_code=503),
-            ProviderError("Could not maintain Microsoft grant concurrency lease.", status_code=503),
+            ProviderError("Microsoft Graph unavailable.", status_code=503),
         ],
     )
-    async def test_microsoft_limiter_failure_retries_message_fetch(self, error: ProviderError) -> None:
+    async def test_microsoft_retryable_failure_retries_message_fetch(self, error: ProviderError) -> None:
         account_repo = AsyncMock()
         account_repo.get_by_subscription_id.return_value = SimpleNamespace(
             id=1, email="owner@example.com", status=AccountStatus.active, provider_context={"client_state": "secret"}
