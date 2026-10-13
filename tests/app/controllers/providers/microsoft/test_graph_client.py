@@ -65,6 +65,39 @@ def test_list_messages_preserves_native_crawling_filter(prefix: str) -> None:
     assert "$search" not in query
 
 
+@pytest.mark.parametrize(
+    ("received_after", "received_before", "date_filter"),
+    [
+        (1700000000, None, "receivedDateTime ge 2023-11-14T22:13:20Z"),
+        (None, 1710000000, "receivedDateTime le 2024-03-09T16:00:00Z"),
+        (
+            1700000000,
+            1710000000,
+            "receivedDateTime ge 2023-11-14T22:13:20Z and receivedDateTime le 2024-03-09T16:00:00Z",
+        ),
+    ],
+)
+def test_list_messages_places_ordered_dates_before_other_filters(
+    received_after: int | None, received_before: int | None, date_filter: str
+) -> None:
+    http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
+    client = GraphClient(http)
+    account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
+
+    asyncio.run(
+        client.list_messages(
+            account,
+            ListMessagesParams(
+                thread_id="conversation-1", received_after=received_after, received_before=received_before
+            ),
+        )
+    )
+
+    query = http.request.await_args.kwargs["params"]
+    assert query["$orderby"] == "receivedDateTime desc"
+    assert query["$filter"] == f"{date_filter} and isDraft eq false and conversationId eq 'conversation-1'"
+
+
 def test_list_threads_accepts_nylas_native_filter() -> None:
     http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
     client = GraphClient(http)

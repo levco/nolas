@@ -17,7 +17,13 @@ def build_graph_filter(params: ListMessagesParams) -> str | None:
     if params.search_query_native:
         return params.search_query_native.removeprefix("$filter=")
 
-    clauses: list[str] = ["isDraft eq false"]
+    # Graph requires $orderby properties before other properties in $filter.
+    clauses: list[str] = []
+    if params.received_after is not None:
+        clauses.append(f"receivedDateTime ge {_iso(params.received_after)}")
+    if params.received_before is not None:
+        clauses.append(f"receivedDateTime le {_iso(params.received_before)}")
+    clauses.append("isDraft eq false")
 
     if params.thread_id:
         escaped = params.thread_id.replace("'", "''")
@@ -30,11 +36,6 @@ def build_graph_filter(params: ListMessagesParams) -> str | None:
         clauses.append(f"subject eq '{escaped}'")
     if params.unread is not None:
         clauses.append(f"isRead eq {'false' if params.unread else 'true'}")
-    if params.received_after is not None:
-        clauses.append(f"receivedDateTime ge {_iso(params.received_after)}")
-    if params.received_before is not None:
-        clauses.append(f"receivedDateTime le {_iso(params.received_before)}")
-
     return " and ".join(clauses)
 
 
