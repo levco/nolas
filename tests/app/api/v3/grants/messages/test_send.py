@@ -9,11 +9,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from app.api.payloads.messages import MessageListResponse, SendMessageResponse
 from app.api.v3.grants import messages as messages_api
 from app.api.v3.grants.messages import _parse_multipart_request
 from app.controllers.providers.base import ProviderSendResult
+from app.models.app import App
 
 
 def _build_multipart_request(
@@ -100,6 +103,12 @@ class TestParseMultipartRequestSdkFormat:
         assert attachment.is_inline is False
         assert attachment.content_id is None
         assert attachment.content_disposition is None
+
+    @pytest.mark.asyncio
+    async def test_preserves_labels_in_multipart_message(self) -> None:
+        request = _build_multipart_request("labels", fields=[("message", _message_json(labels=["Label_1"]))], files=[])
+        message_data, _ = await _parse_multipart_request(request)
+        assert message_data.labels == ["Label_1"]
 
     @pytest.mark.asyncio
     async def test_content_id_named_field_is_treated_as_inline(self) -> None:
@@ -205,7 +214,9 @@ class TestParseMultipartRequestErrors:
 async def test_send_persists_metadata_before_returning(monkeypatch: pytest.MonkeyPatch) -> None:
     account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
     provider = AsyncMock()
-    provider.send_message.return_value = ProviderSendResult(message_id="message-1", thread_id="thread-1")
+    provider.send_message.return_value = ProviderSendResult(
+        message_id="message-1", thread_id="thread-1", labels=["SENT", "Label_1"]
+    )
     registry = Mock(get_client=Mock(return_value=provider))
     email_repo = AsyncMock()
     monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
@@ -217,17 +228,39 @@ async def test_send_persists_metadata_before_returning(monkeypatch: pytest.Monke
                 "subject": "Subject",
                 "body": "Body",
                 "metadata": {"key1": "send-key"},
+                "labels": ["Label_1"],
             }
         ),
         grant_id=str(account.uuid),
-        app=SimpleNamespace(id=1),
+        app=App(id=1),
         registry=registry,
         email_repo=email_repo,
     )
 
     email_repo.save_send_metadata.assert_awaited_once_with(7, "message-1", "thread-1", {"key1": "send-key"})
+    assert isinstance(response, SendMessageResponse)
     assert response.data.metadata == {"key1": "send-key"}
     assert response.data.thread_id == "thread-1"
+    assert provider.send_message.await_args.kwargs["labels"] == ["Label_1"]
+    assert response.data.labels == ["SENT", "Label_1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("labels", [[""], [1], None, "Label_1"])
+async def test_invalid_labels_do_not_send(monkeypatch: pytest.MonkeyPatch, labels: object) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
+    provider = AsyncMock()
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    response = await messages_api.send_message(
+        request=_build_json_request({"to": [], "subject": "Subject", "body": "Body", "labels": labels}),
+        grant_id=str(account.uuid),
+        app=App(id=1),
+        registry=Mock(get_client=Mock(return_value=provider)),
+        email_repo=AsyncMock(),
+    )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    provider.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -250,11 +283,12 @@ async def test_send_succeeds_when_metadata_persistence_fails(monkeypatch: pytest
             }
         ),
         grant_id=str(account.uuid),
-        app=SimpleNamespace(id=1),
+        app=App(id=1),
         registry=registry,
         email_repo=email_repo,
     )
 
+    assert isinstance(response, SendMessageResponse)
     assert response.data.id == "message-1"
 
 
@@ -285,11 +319,12 @@ async def test_list_by_metadata_returns_stored_ids_when_provider_is_not_ready(mo
         search_query_native=None,
         metadata_pair="key1:send-key",
         query_imap=None,
-        app=SimpleNamespace(id=1),
+        app=App(id=1),
         registry=registry,
         email_repo=email_repo,
     )
 
+    assert isinstance(response, MessageListResponse)
     assert [item.id for item in response.data] == ["message-1"]
     assert response.data[0].thread_id == "thread-1"
     assert response.data[0].metadata == {"key1": "send-key"}
@@ -324,11 +359,12 @@ async def test_list_by_metadata_paginates(monkeypatch: pytest.MonkeyPatch) -> No
         search_query_native=None,
         metadata_pair="key1:send-key",
         query_imap=None,
-        app=SimpleNamespace(id=1),
+        app=App(id=1),
         registry=registry,
         email_repo=email_repo,
     )
 
+    assert isinstance(response, MessageListResponse)
     assert [item.id for item in response.data] == ["message-1"]
     assert response.next_cursor == "11"
     email_repo.get_by_account_and_metadata_pair.assert_awaited_once_with(7, "key1", "send-key", 1, 10)
@@ -354,9 +390,10 @@ async def test_list_rejects_empty_metadata_pair(monkeypatch: pytest.MonkeyPatch)
         search_query_native=None,
         metadata_pair="",
         query_imap=None,
-        app=SimpleNamespace(id=1),
+        app=App(id=1),
         registry=Mock(),
         email_repo=AsyncMock(),
     )
 
+    assert isinstance(response, JSONResponse)
     assert response.status_code == 400

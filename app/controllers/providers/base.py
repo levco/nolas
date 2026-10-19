@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
     EmailAddress,
@@ -8,6 +9,7 @@ from app.api.payloads.messages import (
     MessageAttachment,
 )
 from app.api.payloads.threads import Thread
+from app.controllers.providers.exceptions import ProviderError
 from app.models.account import Account
 
 
@@ -68,6 +70,7 @@ class ListThreadsResult:
 class ProviderSendResult:
     message_id: str
     thread_id: str
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -88,6 +91,24 @@ class AttachmentContent:
 
 class ProviderClient(ABC):
     """Provider-specific email operations, normalized to Nylas v3 shapes."""
+
+    async def list_labels(self, account: Account) -> list[Label]:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
+
+    async def get_label(self, account: Account, label_id: str) -> Label:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
+
+    async def create_label(self, account: Account, request: CreateLabelRequest) -> Label:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
+
+    async def update_label(self, account: Account, label_id: str, request: UpdateLabelRequest) -> Label:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
+
+    async def delete_label(self, account: Account, label_id: str) -> None:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
+
+    async def update_message_labels(self, account: Account, message_id: str, labels: list[str]) -> Message:
+        raise ProviderError("Labels are not supported by this provider.", status_code=400)
 
     @abstractmethod
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
@@ -122,6 +143,7 @@ class ProviderClient(ABC):
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[AttachmentData] | None = None,
+        labels: list[str] | None = None,
     ) -> ProviderSendResult:
         raise NotImplementedError
 

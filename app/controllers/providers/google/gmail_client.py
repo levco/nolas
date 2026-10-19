@@ -4,7 +4,9 @@ import logging
 import re
 import uuid
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
+from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
     EmailAddress,
@@ -66,10 +68,81 @@ class GmailClient(ProviderClient):
     def __init__(self, http_client: "AuthorizedHttpClient") -> None:
         self._http = http_client
 
+    async def list_labels(self, account: Account) -> list[Label]:
+        raw = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels")
+        labels = [self._map_label(account, label) for label in raw.get("labels", [])]
+        # labels.list omits colors; hydrate user labels with bounded concurrency.
+        user_labels = [label for label in labels if not label.system_label]
+        details: dict[str, Label] = {}
+        for start in range(0, len(user_labels), FALLBACK_FETCH_CONCURRENCY):
+            batch = user_labels[start : start + FALLBACK_FETCH_CONCURRENCY]
+            fetched = await asyncio.gather(*(self.get_label(account, label.id) for label in batch))
+            details.update((label.id, label) for label in fetched)
+        return [details.get(label.id, label) for label in labels]
+
+    async def get_label(self, account: Account, label_id: str) -> Label:
+        raw = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels/{quote(label_id, safe='')}")
+        return self._map_label(account, raw)
+
+    async def create_label(self, account: Account, request: CreateLabelRequest) -> Label:
+        body: dict[str, Any] = {"name": request.name}
+        if request.color is not None or request.text_color is not None:
+            body["color"] = self._label_color(request.color, request.text_color)
+        raw = await self._http.request(account, "POST", f"{GMAIL_API_BASE}/labels", json_body=body)
+        return self._map_label(account, raw)
+
+    async def update_label(self, account: Account, label_id: str, request: UpdateLabelRequest) -> Label:
+        current = await self.get_label(account, label_id)
+        if current.system_label:
+            raise ProviderError("Gmail system labels cannot be edited.", status_code=400)
+        body: dict[str, Any] = {}
+        if request.name is not None:
+            body["name"] = request.name
+        color_fields = request.model_fields_set & {"color", "text_color"}
+        if color_fields:
+            if any(getattr(request, key) is None for key in color_fields):
+                raise ProviderError("Gmail label colors cannot be cleared; specify a palette color.", status_code=400)
+            body["color"] = self._label_color(
+                request.color if "color" in color_fields else current.color,
+                request.text_color if "text_color" in color_fields else current.text_color,
+            )
+        raw = await self._http.request(
+            account, "PATCH", f"{GMAIL_API_BASE}/labels/{quote(label_id, safe='')}", json_body=body
+        )
+        return self._map_label(account, raw)
+
+    async def delete_label(self, account: Account, label_id: str) -> None:
+        current = await self.get_label(account, label_id)
+        if current.system_label:
+            raise ProviderError("Gmail system labels cannot be deleted.", status_code=400)
+        await self._http.request(
+            account, "DELETE", f"{GMAIL_API_BASE}/labels/{quote(label_id, safe='')}", expect_json=False
+        )
+
+    async def update_message_labels(self, account: Account, message_id: str, labels: list[str]) -> Message:
+        message = await self.get_message(account, message_id)
+        if message is None:
+            raise ProviderNotFoundError()
+        target = list(dict.fromkeys(labels))
+        add = [label for label in target if label not in message.labels]
+        remove = [label for label in message.labels if label not in target]
+        if not add and not remove:
+            return message
+        await self._http.request(
+            account,
+            "POST",
+            f"{GMAIL_API_BASE}/messages/{quote(message_id, safe='')}/modify",
+            json_body={"addLabelIds": add, "removeLabelIds": remove},
+        )
+        message = await self.get_message(account, message_id)
+        if message is None:
+            raise ProviderNotFoundError()
+        return message
+
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
         try:
             raw = await self._http.request(
-                account, "GET", f"{GMAIL_API_BASE}/messages/{message_id}", params={"format": "full"}
+                account, "GET", f"{GMAIL_API_BASE}/messages/{quote(message_id, safe='')}", params={"format": "full"}
             )
         except ProviderNotFoundError:
             return None
@@ -98,6 +171,9 @@ class GmailClient(ProviderClient):
             )
 
         message.unread = unread
+        message.labels = [label for label in message.labels if label != "UNREAD"]
+        if unread:
+            message.labels.append("UNREAD")
         return message
 
     async def list_messages(self, account: Account, params: ListMessagesParams) -> ListMessagesResult:
@@ -163,6 +239,7 @@ class GmailClient(ProviderClient):
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[AttachmentData] | None = None,
+        labels: list[str] | None = None,
     ) -> ProviderSendResult:
         thread_id: str | None = None
         in_reply_to: str | None = None
@@ -230,7 +307,22 @@ class GmailClient(ProviderClient):
         message_id = response.get("id")
         if not message_id:
             raise ProviderError(f"Gmail send did not return a message id: {response}")
-        return ProviderSendResult(message_id=message_id, thread_id=response.get("threadId", message_id))
+        assigned_labels = list(response.get("labelIds") or [])
+        if labels:
+            try:
+                labeled = await self._http.request(
+                    account,
+                    "POST",
+                    f"{GMAIL_API_BASE}/messages/{quote(message_id, safe='')}/modify",
+                    json_body={"addLabelIds": list(dict.fromkeys(labels))},
+                )
+                assigned_labels = list(labeled.get("labelIds") or [])
+            except Exception:
+                # Sending succeeded; reporting failure here could cause the caller to send a duplicate.
+                logger.exception("Email sent but could not apply labels; message_id=%s", message_id)
+        return ProviderSendResult(
+            message_id=message_id, thread_id=response.get("threadId", message_id), labels=assigned_labels
+        )
 
     async def get_attachment_metadata(
         self, account: Account, message_id: str, attachment_id: str
@@ -315,6 +407,24 @@ class GmailClient(ProviderClient):
         ]
         messages = _filter_in_memory(messages, params)
         return ListMessagesResult(messages=messages[: params.limit])
+
+    def _label_color(self, color: str | None, text_color: str | None) -> dict[str, str]:
+        background = "#ffffff" if color is None else color
+        text = "#000000" if text_color is None else text_color
+        if not all(re.fullmatch(r"#[0-9a-fA-F]{6}", value) for value in (background, text)):
+            raise ProviderError("Gmail label colors must be #RRGGBB values from Gmail's palette.", status_code=400)
+        return {"backgroundColor": background.lower(), "textColor": text.lower()}
+
+    def _map_label(self, account: Account, raw: dict[str, Any]) -> Label:
+        color = raw.get("color") or {}
+        return Label(
+            id=raw["id"],
+            grant_id=str(account.uuid),
+            name=gmail_label_name(raw["id"], raw.get("name")),
+            color=color.get("backgroundColor"),
+            text_color=color.get("textColor"),
+            system_label=raw.get("type") == "system",
+        )
 
     async def _hydrate_threads(self, account: Account, thread_ids: list[str]) -> dict[str, list[Message]]:
         if not thread_ids:

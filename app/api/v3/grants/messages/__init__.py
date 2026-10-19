@@ -11,6 +11,7 @@ from typing import Any
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
@@ -111,8 +112,9 @@ async def get_message(
     },
     summary="Update a message",
     description=(
-        "Updates a message's read state. Marking a message read also marks every unread message "
-        "in the same thread read."
+        "Updates a message's labels and/or read state. Labels replace the complete assignment list. "
+        "Marking a message read also marks every unread message in the same thread read. "
+        "When both fields are supplied, unread is applied after labels."
     ),
 )
 @inject
@@ -129,7 +131,12 @@ async def update_message(
     assert account is not None
 
     try:
-        message = await registry.get_client(account).update_message_unread(account, message_id, update_request.unread)
+        client = registry.get_client(account)
+        message: Message | None = None
+        if update_request.labels is not None:
+            message = await client.update_message_labels(account, message_id, update_request.labels)
+        if update_request.unread is not None:
+            message = await client.update_message_unread(account, message_id, update_request.unread)
         if message is None:
             return create_error_response(
                 error_type="not_found_error",
@@ -336,6 +343,7 @@ async def send_message(
             reply_to=message_data.reply_to,
             reply_to_message_id=message_data.reply_to_message_id,
             attachments=attachments,
+            labels=message_data.labels,
         )
 
         if message_data.metadata:
@@ -359,9 +367,16 @@ async def send_message(
             reply_to_message_id=message_data.reply_to_message_id,
             metadata=message_data.metadata,
             thread_id=result.thread_id,
+            labels=result.labels,
         )
         return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=response_data)
 
+    except (ValidationError, ValueError) as e:
+        return create_error_response(
+            error_type="invalid_request_error",
+            message=str(e),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
     except SMTPInvalidParameterError as e:
         return create_error_response(
             error_type="invalid_request_error",

@@ -23,6 +23,7 @@ from app.models.app import App
 
 from .attachments import router as attachments_router
 from .folders import router as folders_router
+from .labels import router as labels_router
 from .messages import router as messages_router
 from .threads import router as threads_router
 
@@ -34,6 +35,7 @@ router.include_router(attachments_router, prefix="/{grant_id}/attachments", tags
 router.include_router(messages_router, prefix="/{grant_id}/messages", tags=["messages"])
 router.include_router(threads_router, prefix="/{grant_id}/threads", tags=["threads"])
 router.include_router(folders_router, prefix="/{grant_id}/folders", tags=["folders"])
+router.include_router(labels_router, prefix="/{grant_id}/labels", tags=["labels"])
 
 
 def _grant_data(account: Account) -> GrantData:

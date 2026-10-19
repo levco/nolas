@@ -86,6 +86,7 @@ def map_graph_message(raw: dict[str, Any], grant_id: UUID, include_headers: bool
         unread=not raw.get("isRead", True),
         starred=flag_status == "flagged",
         folders=[raw["parentFolderId"]] if raw.get("parentFolderId") else [],
+        labels=list(raw.get("categories") or []),
         attachments=[map_graph_attachment(a) for a in raw.get("attachments") or []],
         headers=message_headers,
     )

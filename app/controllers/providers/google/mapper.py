@@ -165,6 +165,7 @@ def map_gmail_message(raw: dict[str, Any], grant_id: UUID, include_headers: bool
         unread="UNREAD" in label_ids,
         starred="STARRED" in label_ids,
         folders=folders,
+        labels=list(label_ids),
         attachments=extract_gmail_attachments(payload, html_body=body),
         headers=message_headers,
     )
