@@ -30,7 +30,7 @@ def test_gmail_list_fetches_custom_label_colors(account: Account) -> None:
                     "id": "Label_1",
                     "name": "Deals",
                     "type": "user",
-                    "color": {"backgroundColor": "#f83a22", "textColor": "#ffffff"},
+                    "color": {"backgroundColor": "#fb4c2f", "textColor": "#ffffff"},
                 },
             ]
         )
@@ -40,7 +40,7 @@ def test_gmail_list_fetches_custom_label_colors(account: Account) -> None:
 
     assert labels[0].name == "Inbox"
     assert labels[0].system_label is True
-    assert labels[1].color == "#f83a22"
+    assert labels[1].color == "#fb4c2f"
     assert labels[1].text_color == "#ffffff"
     assert labels[1].grant_id == str(account.uuid)
     assert http.request.await_count == 2
@@ -50,7 +50,7 @@ def test_gmail_create_label_maps_colors(account: Account) -> None:
     http = Mock(request=AsyncMock(return_value={"id": "Label_1", "name": "Deals"}))
 
     label = asyncio.run(
-        GmailClient(http).create_label(account, CreateLabelRequest(name="Deals", color="#F83A22", text_color="#FFFFFF"))
+        GmailClient(http).create_label(account, CreateLabelRequest(name="Deals", color="#FB4C2F", text_color="#FFFFFF"))
     )
 
     assert label.id == "Label_1"
@@ -58,7 +58,7 @@ def test_gmail_create_label_maps_colors(account: Account) -> None:
         account,
         "POST",
         f"{GMAIL_API_BASE}/labels",
-        json_body={"name": "Deals", "color": {"backgroundColor": "#f83a22", "textColor": "#ffffff"}},
+        json_body={"name": "Deals", "color": {"backgroundColor": "#fb4c2f", "textColor": "#ffffff"}},
     )
 
 
@@ -67,16 +67,16 @@ def test_gmail_color_update_preserves_text_color(account: Account) -> None:
         request=AsyncMock(
             side_effect=[
                 {"id": "Label_1", "name": "Deals", "color": {"backgroundColor": "#ffffff", "textColor": "#434343"}},
-                {"id": "Label_1", "name": "Deals", "color": {"backgroundColor": "#f83a22", "textColor": "#434343"}},
+                {"id": "Label_1", "name": "Deals", "color": {"backgroundColor": "#fb4c2f", "textColor": "#434343"}},
             ]
         )
     )
 
-    label = asyncio.run(GmailClient(http).update_label(account, "Label_1", UpdateLabelRequest(color="#f83a22")))
+    label = asyncio.run(GmailClient(http).update_label(account, "Label_1", UpdateLabelRequest(color="#fb4c2f")))
 
-    assert label.color == "#f83a22"
+    assert label.color == "#fb4c2f"
     assert http.request.await_args.kwargs["json_body"] == {
-        "color": {"backgroundColor": "#f83a22", "textColor": "#434343"}
+        "color": {"backgroundColor": "#fb4c2f", "textColor": "#434343"}
     }
 
 
@@ -263,6 +263,22 @@ def test_gmail_rejects_invalid_color_format(account: Account, color: str) -> Non
     with pytest.raises(ProviderError, match="#RRGGBB"):
         asyncio.run(GmailClient(http).create_label(account, CreateLabelRequest(name="Deals", color=color)))
     http.request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("color_field", ["color", "text_color"])
+def test_gmail_rejects_non_palette_colors_before_writing(account: Account, operation: str, color_field: str) -> None:
+    http = Mock(request=AsyncMock(return_value={"id": "Label_1", "name": "Deals", "type": "user"}))
+    client = GmailClient(http)
+    changes = {color_field: "#123456"}
+    with pytest.raises(ProviderError, match="palette") as exc:
+        if operation == "create":
+            asyncio.run(client.create_label(account, CreateLabelRequest(name="Deals", **changes)))
+        else:
+            asyncio.run(client.update_label(account, "Label_1", UpdateLabelRequest(**changes)))
+
+    assert exc.value.status_code == 400
+    assert all(call.args[1] == "GET" for call in http.request.await_args_list)
 
 
 @pytest.mark.parametrize("client_type", [GmailClient, GraphClient])

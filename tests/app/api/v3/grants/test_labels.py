@@ -5,7 +5,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.types import Message
 
+from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.labels import (
     CreateLabelRequest,
     Label,
@@ -174,7 +176,9 @@ async def test_unread_only_update_does_not_replace_labels(monkeypatch: pytest.Mo
     provider.update_message_unread.assert_awaited_once_with(account, "m1", True)
 
 
-@pytest.mark.parametrize("payload", [{}, {"labels": [""]}, {"labels": None}, {"labels": [], "unread": None}])
+@pytest.mark.parametrize(
+    "payload", [{}, {"labels": [""]}, {"labels": [" \t\n"]}, {"labels": None}, {"labels": [], "unread": None}]
+)
 def test_invalid_message_label_changes_are_rejected(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         UpdateMessageRequest.model_validate(payload)
@@ -190,6 +194,47 @@ def test_invalid_label_updates_are_rejected(payload: dict[str, object]) -> None:
 def test_blank_label_names_are_rejected(name: str) -> None:
     with pytest.raises(ValidationError):
         CreateLabelRequest(name=name)
+
+
+def test_label_names_are_trimmed_without_changing_internal_spaces() -> None:
+    assert CreateLabelRequest(name=" \tDeals  2026\n").name == "Deals  2026"
+    assert UpdateLabelRequest(name=" \tDeals  2026\n").name == "Deals  2026"
+
+
+def test_message_label_ids_are_preserved_exactly() -> None:
+    assert UpdateMessageRequest(labels=[" Deals/2026 "]).labels == [" Deals/2026 "]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
+@pytest.mark.parametrize("label_id", ["", "   ", "\t"])
+async def test_blank_label_path_never_reaches_provider(
+    monkeypatch: pytest.MonkeyPatch, method: str, label_id: str
+) -> None:
+    app = FastAPI()
+    app.include_router(labels_api.router, prefix="/labels")
+    app.dependency_overrides[get_current_app] = lambda: App(id=1)
+    validate = AsyncMock()
+    monkeypatch.setattr(labels_api, "validate_grant_access", validate)
+    responses: list[Message] = []
+
+    async def send(message: Message) -> None:
+        responses.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "method": method,
+            "path": f"/labels/{label_id}",
+            "query_string": b"grant_id=grant-1",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        AsyncMock(return_value={"type": "http.request", "body": b'{"color": "preset0"}'}),
+        send,
+    )
+
+    assert responses[0]["status"] == 422
+    validate.assert_not_awaited()
 
 
 def test_routes_are_registered_with_documented_schemas() -> None:

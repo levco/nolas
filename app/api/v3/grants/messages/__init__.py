@@ -11,7 +11,6 @@ from typing import Any
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
@@ -322,14 +321,20 @@ async def send_message(
     assert account is not None  # account is guaranteed to be not None when error_response is None
 
     try:
-        # Check if this is a multipart request (with attachments)
-        content_type = request.headers.get("content-type", "")
-        if content_type.startswith("multipart/form-data"):
-            message_data, attachments = await _parse_multipart_request(request)
-        else:
-            body = await request.body()
-            message_data = SendMessageRequest.model_validate_json(body)
-            attachments = [attachment.to_attachment_data() for attachment in message_data.attachments or []]
+        try:
+            content_type = request.headers.get("content-type", "")
+            if content_type.startswith("multipart/form-data"):
+                message_data, attachments = await _parse_multipart_request(request)
+            else:
+                body = await request.body()
+                message_data = SendMessageRequest.model_validate_json(body)
+                attachments = [attachment.to_attachment_data() for attachment in message_data.attachments or []]
+        except ValueError as e:
+            return create_error_response(
+                error_type="invalid_request_error",
+                message=str(e),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         sender = message_data.from_ or [EmailAddress(name=account.email, email=account.email)]
         result = await registry.get_client(account).send_message(
@@ -371,12 +376,6 @@ async def send_message(
         )
         return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=response_data)
 
-    except (ValidationError, ValueError) as e:
-        return create_error_response(
-            error_type="invalid_request_error",
-            message=str(e),
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
     except SMTPInvalidParameterError as e:
         return create_error_response(
             error_type="invalid_request_error",

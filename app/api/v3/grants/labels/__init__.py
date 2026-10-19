@@ -1,5 +1,7 @@
+from typing import Annotated
+
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Path, Response
 from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
@@ -52,7 +54,7 @@ async def create_label(
 @inject
 async def get_label(
     grant_id: str,
-    label_id: str,
+    label_id: Annotated[str, Path(min_length=1, pattern=r"\S")],
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
 ) -> LabelResponse | JSONResponse:
@@ -70,7 +72,7 @@ async def get_label(
 @inject
 async def update_label(
     grant_id: str,
-    label_id: str,
+    label_id: Annotated[str, Path(min_length=1, pattern=r"\S")],
     request: UpdateLabelRequest,
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
@@ -89,7 +91,7 @@ async def update_label(
 @inject
 async def delete_label(
     grant_id: str,
-    label_id: str,
+    label_id: Annotated[str, Path(min_length=1, pattern=r"\S")],
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
 ) -> Response:

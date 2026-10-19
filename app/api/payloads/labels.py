@@ -30,7 +30,7 @@ class CreateLabelRequest(BaseModel):
     def require_visible_name(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Label name cannot be blank.")
-        return value
+        return value.strip()
 
 
 class UpdateLabelRequest(BaseModel):
@@ -48,6 +48,8 @@ class UpdateLabelRequest(BaseModel):
             raise ValueError("Label name cannot be null.")
         if self.name is not None and not self.name.strip():
             raise ValueError("Label name cannot be blank.")
+        if self.name is not None:
+            self.name = self.name.strip()
         return self
 
 

@@ -156,8 +156,8 @@ class UpdateMessageRequest(BaseModel):
         for name in ("unread", "labels"):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} cannot be null.")
-        if self.labels is not None and any(not label_id for label_id in self.labels):
-            raise ValueError("Label IDs cannot be empty.")
+        if self.labels is not None and any(not label_id.strip() for label_id in self.labels):
+            raise ValueError("Label IDs cannot be blank.")
         return self
 
 
@@ -187,7 +187,7 @@ class SendMessageRequest(BaseModel):
     reply_to_message_id: str | None = None
     attachments: list[SendMessageAttachment] | None = None
     metadata: dict[str, str] | None = None
-    labels: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    labels: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(default_factory=list)
 
     class Config:
         populate_by_name = True

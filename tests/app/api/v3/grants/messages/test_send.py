@@ -12,7 +12,7 @@ import pytest
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from app.api.payloads.messages import MessageListResponse, SendMessageResponse
+from app.api.payloads.messages import MessageListResponse, SendMessageRequest, SendMessageResponse
 from app.api.v3.grants import messages as messages_api
 from app.api.v3.grants.messages import _parse_multipart_request
 from app.controllers.providers.base import ProviderSendResult
@@ -246,7 +246,7 @@ async def test_send_persists_metadata_before_returning(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("labels", [[""], [1], None, "Label_1"])
+@pytest.mark.parametrize("labels", [[""], [" \t\n"], [1], None, "Label_1"])
 async def test_invalid_labels_do_not_send(monkeypatch: pytest.MonkeyPatch, labels: object) -> None:
     account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
     provider = AsyncMock()
@@ -258,6 +258,50 @@ async def test_invalid_labels_do_not_send(monkeypatch: pytest.MonkeyPatch, label
         registry=Mock(get_client=Mock(return_value=provider)),
         email_repo=AsyncMock(),
     )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    provider.send_message.assert_not_awaited()
+
+
+def test_send_preserves_nonblank_opaque_label_ids() -> None:
+    request = SendMessageRequest(to=[], subject="Subject", body="Body", labels=[" Deals/2026 "])
+    assert request.labels == [" Deals/2026 "]
+
+
+@pytest.mark.asyncio
+async def test_smtp_configuration_error_remains_server_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
+    provider = AsyncMock()
+    provider.send_message.side_effect = ValueError("SMTP host and port are required")
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+
+    response = await messages_api.send_message(
+        request=_build_json_request({"to": [], "subject": "Subject", "body": "Body"}),
+        grant_id=str(account.uuid),
+        app=App(id=1),
+        registry=Mock(get_client=Mock(return_value=provider)),
+        email_repo=AsyncMock(),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 500
+    assert json.loads(bytes(response.body))["error"]["type"] == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_invalid_multipart_message_is_a_request_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    account = SimpleNamespace(id=7, uuid=uuid.uuid4(), email="sender@example.com")
+    provider = AsyncMock()
+    monkeypatch.setattr(messages_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+
+    response = await messages_api.send_message(
+        request=_build_multipart_request("missing-message", fields=[], files=[]),
+        grant_id=str(account.uuid),
+        app=App(id=1),
+        registry=Mock(get_client=Mock(return_value=provider)),
+        email_repo=AsyncMock(),
+    )
+
     assert isinstance(response, JSONResponse)
     assert response.status_code == 400
     provider.send_message.assert_not_awaited()
