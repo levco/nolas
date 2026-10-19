@@ -226,7 +226,10 @@ class ImapProviderAdapter(ProviderClient):
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[AttachmentData] | None = None,
+        labels: list[str] | None = None,
     ) -> ProviderSendResult:
+        if labels:
+            raise ProviderError("Labels are not supported for IMAP accounts.", status_code=400)
         result = await self._email_controller.send_email(
             account=account,
             to=to,

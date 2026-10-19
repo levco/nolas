@@ -3,7 +3,7 @@ Pydantic models for message-related API endpoints.
 """
 
 import base64
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -115,6 +115,7 @@ class Message(BaseMessage):
     starred: bool
     unread: bool
     folders: list[str]
+    labels: list[str] = Field(default_factory=list)
     grant_id: str
     date: int
     object: str
@@ -145,7 +146,19 @@ class MessageListResponse(BaseModel):
 class UpdateMessageRequest(BaseModel):
     """Fields supported by the message update endpoint."""
 
-    unread: bool
+    unread: bool | None = None
+    labels: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_changes(self) -> "UpdateMessageRequest":
+        if self.unread is None and self.labels is None:
+            raise ValueError("Provide unread or labels to update.")
+        for name in ("unread", "labels"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null.")
+        if self.labels is not None and any(not label_id.strip() for label_id in self.labels):
+            raise ValueError("Label IDs cannot be blank.")
+        return self
 
 
 class SendMessageData(BaseMessage):
@@ -158,6 +171,7 @@ class SendMessageData(BaseMessage):
 
     grant_id: str
     thread_id: str | None = None
+    labels: list[str] = Field(default_factory=list)
 
 
 class SendMessageRequest(BaseModel):
@@ -173,6 +187,7 @@ class SendMessageRequest(BaseModel):
     reply_to_message_id: str | None = None
     attachments: list[SendMessageAttachment] | None = None
     metadata: dict[str, str] | None = None
+    labels: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(default_factory=list)
 
     class Config:
         populate_by_name = True

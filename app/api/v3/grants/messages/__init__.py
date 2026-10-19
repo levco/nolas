@@ -111,8 +111,9 @@ async def get_message(
     },
     summary="Update a message",
     description=(
-        "Updates a message's read state. Marking a message read also marks every unread message "
-        "in the same thread read."
+        "Updates a message's labels and/or read state. Labels replace the complete assignment list. "
+        "Marking a message read also marks every unread message in the same thread read. "
+        "When both fields are supplied, unread is applied after labels."
     ),
 )
 @inject
@@ -129,7 +130,12 @@ async def update_message(
     assert account is not None
 
     try:
-        message = await registry.get_client(account).update_message_unread(account, message_id, update_request.unread)
+        client = registry.get_client(account)
+        message: Message | None = None
+        if update_request.labels is not None:
+            message = await client.update_message_labels(account, message_id, update_request.labels)
+        if update_request.unread is not None:
+            message = await client.update_message_unread(account, message_id, update_request.unread)
         if message is None:
             return create_error_response(
                 error_type="not_found_error",
@@ -315,14 +321,20 @@ async def send_message(
     assert account is not None  # account is guaranteed to be not None when error_response is None
 
     try:
-        # Check if this is a multipart request (with attachments)
-        content_type = request.headers.get("content-type", "")
-        if content_type.startswith("multipart/form-data"):
-            message_data, attachments = await _parse_multipart_request(request)
-        else:
-            body = await request.body()
-            message_data = SendMessageRequest.model_validate_json(body)
-            attachments = [attachment.to_attachment_data() for attachment in message_data.attachments or []]
+        try:
+            content_type = request.headers.get("content-type", "")
+            if content_type.startswith("multipart/form-data"):
+                message_data, attachments = await _parse_multipart_request(request)
+            else:
+                body = await request.body()
+                message_data = SendMessageRequest.model_validate_json(body)
+                attachments = [attachment.to_attachment_data() for attachment in message_data.attachments or []]
+        except ValueError as e:
+            return create_error_response(
+                error_type="invalid_request_error",
+                message=str(e),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         sender = message_data.from_ or [EmailAddress(name=account.email, email=account.email)]
         result = await registry.get_client(account).send_message(
@@ -336,6 +348,7 @@ async def send_message(
             reply_to=message_data.reply_to,
             reply_to_message_id=message_data.reply_to_message_id,
             attachments=attachments,
+            labels=message_data.labels,
         )
 
         if message_data.metadata:
@@ -359,6 +372,7 @@ async def send_message(
             reply_to_message_id=message_data.reply_to_message_id,
             metadata=message_data.metadata,
             thread_id=result.thread_id,
+            labels=result.labels,
         )
         return SendMessageResponse(request_id=str(uuid.uuid4()), grant_id=grant_id, data=response_data)
 

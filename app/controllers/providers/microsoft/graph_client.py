@@ -1,8 +1,11 @@
 import base64
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
+from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
     EmailAddress,
@@ -51,11 +54,11 @@ IMMUTABLE_ID_HEADER = {"Prefer": 'IdType="ImmutableId"'}
 
 MESSAGE_SELECT_FIELDS = (
     "id,conversationId,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,"
-    "replyTo,receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments,internetMessageId"
+    "replyTo,receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments,internetMessageId,categories"
 )
 THREAD_MESSAGE_SELECT_FIELDS = (
     "id,conversationId,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,"
-    "receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments"
+    "receivedDateTime,sentDateTime,isRead,isDraft,flag,parentFolderId,hasAttachments,categories"
 )
 ATTACHMENT_SELECT_FIELDS = "id,name,contentType,size,isInline"
 
@@ -75,17 +78,116 @@ class GraphClient(ProviderClient):
     def __init__(self, http_client: AuthorizedHttpClient) -> None:
         self._http = http_client
 
+    def _map_label(self, account: Account, raw: dict[str, Any]) -> Label:
+        return Label(
+            id=raw["displayName"],
+            grant_id=str(account.uuid),
+            name=raw["displayName"],
+            color=raw.get("color"),
+        )
+
+    async def _list_categories(self, account: Account) -> list[dict[str, Any]]:
+        response = await self._http.request(account, "GET", f"{GRAPH_API_BASE}/me/outlook/masterCategories")
+        categories: list[dict[str, Any]] = []
+        while True:
+            categories.extend(response.get("value", []))
+            next_link = response.get("@odata.nextLink")
+            if not next_link:
+                return categories
+            response = await self._http.request(account, "GET", next_link)
+
+    async def _get_category(self, account: Account, label_id: str) -> dict[str, Any]:
+        for category in await self._list_categories(account):
+            if category["displayName"] == label_id:
+                return category
+        raise ProviderNotFoundError("Label not found.")
+
+    async def list_labels(self, account: Account) -> list[Label]:
+        return [self._map_label(account, raw) for raw in await self._list_categories(account)]
+
+    async def get_label(self, account: Account, label_id: str) -> Label:
+        return self._map_label(account, await self._get_category(account, label_id))
+
+    @staticmethod
+    def _category_color(color: str | None, text_color: str | None) -> str:
+        if text_color is not None:
+            raise ProviderError("Outlook categories do not support text_color.", status_code=400)
+        value = color.lower() if color is not None else "none"
+        if value != "none" and not re.fullmatch(r"preset(?:[0-9]|1[0-9]|2[0-4])", value):
+            raise ProviderError("Outlook category color must be none or preset0 through preset24.", status_code=400)
+        return value
+
+    async def create_label(self, account: Account, request: CreateLabelRequest) -> Label:
+        raw = await self._http.request(
+            account,
+            "POST",
+            f"{GRAPH_API_BASE}/me/outlook/masterCategories",
+            json_body={"displayName": request.name, "color": self._category_color(request.color, request.text_color)},
+        )
+        return self._map_label(account, raw)
+
+    async def update_label(self, account: Account, label_id: str, request: UpdateLabelRequest) -> Label:
+        if request.name is not None and request.name != label_id:
+            raise ProviderError("Outlook category names cannot be changed.", status_code=400)
+        if request.text_color is not None:
+            raise ProviderError("Outlook categories do not support text_color.", status_code=400)
+        current = await self._get_category(account, label_id)
+        if "color" not in request.model_fields_set:
+            return self._map_label(account, current)
+        raw = await self._http.request(
+            account,
+            "PATCH",
+            f"{GRAPH_API_BASE}/me/outlook/masterCategories/{quote(current['id'], safe='')}",
+            json_body={"color": self._category_color(request.color, request.text_color)},
+        )
+        return self._map_label(account, raw)
+
+    async def delete_label(self, account: Account, label_id: str) -> None:
+        current = await self._get_category(account, label_id)
+        await self._http.request(
+            account,
+            "DELETE",
+            f"{GRAPH_API_BASE}/me/outlook/masterCategories/{quote(current['id'], safe='')}",
+            expect_json=False,
+        )
+
+    async def update_message_labels(self, account: Account, message_id: str, labels: list[str]) -> Message:
+        raw = await self._get_message_data(account, message_id)
+        if raw is None:
+            raise ProviderNotFoundError()
+        etag = raw.get("@odata.etag")
+        if not isinstance(etag, str) or not etag:
+            raise ProviderError("Provider omitted the message version; cannot safely modify categories.")
+        message = map_graph_message(raw, account.uuid)
+        labels = list(dict.fromkeys(labels))
+        await self._http.request(
+            account,
+            "PATCH",
+            f"{GRAPH_API_BASE}/me/messages/{quote(message_id, safe='')}",
+            json_body={"categories": labels},
+            headers={**IMMUTABLE_ID_HEADER, "If-Match": etag},
+            expect_json=False,
+        )
+        message.labels = labels
+        return message
+
     def _message_select(self, include_headers: bool) -> str:
         if include_headers:
             return f"{MESSAGE_SELECT_FIELDS},internetMessageHeaders"
         return MESSAGE_SELECT_FIELDS
 
     async def get_message(self, account: Account, message_id: str, include_headers: bool = False) -> Message | None:
+        raw = await self._get_message_data(account, message_id, include_headers)
+        return map_graph_message(raw, account.uuid, include_headers=include_headers) if raw is not None else None
+
+    async def _get_message_data(
+        self, account: Account, message_id: str, include_headers: bool = False
+    ) -> dict[str, Any] | None:
         try:
             raw = await self._http.request(
                 account,
                 "GET",
-                f"{GRAPH_API_BASE}/me/messages/{message_id}",
+                f"{GRAPH_API_BASE}/me/messages/{quote(message_id, safe='')}",
                 params={
                     "$select": self._message_select(include_headers),
                     "$expand": f"attachments($select={ATTACHMENT_SELECT_FIELDS})",
@@ -94,7 +196,7 @@ class GraphClient(ProviderClient):
             )
         except ProviderNotFoundError:
             return None
-        return map_graph_message(raw, account.uuid, include_headers=include_headers)
+        return dict(raw)
 
     async def update_message_unread(self, account: Account, message_id: str, unread: bool) -> Message | None:
         message = await self.get_message(account, message_id)
@@ -339,7 +441,11 @@ class GraphClient(ProviderClient):
         reply_to: list[EmailAddress] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[AttachmentData] | None = None,
+        labels: list[str] | None = None,
     ) -> ProviderSendResult:
+        message_body = self._build_message_body(to, subject, body, cc, bcc, reply_to, from_)
+        if labels:
+            message_body["categories"] = list(dict.fromkeys(labels))
         if reply_to_message_id:
             draft = await self._http.request(
                 account,
@@ -348,12 +454,11 @@ class GraphClient(ProviderClient):
                 json_body={},
                 headers=IMMUTABLE_ID_HEADER,
             )
-            patch_body = self._build_message_body(to, subject, body, cc, bcc, reply_to, from_)
             draft = await self._http.request(
                 account,
                 "PATCH",
                 f"{GRAPH_API_BASE}/me/messages/{draft['id']}",
-                json_body=patch_body,
+                json_body=message_body,
                 headers=IMMUTABLE_ID_HEADER,
             )
         else:
@@ -361,7 +466,7 @@ class GraphClient(ProviderClient):
                 account,
                 "POST",
                 f"{GRAPH_API_BASE}/me/messages",
-                json_body=self._build_message_body(to, subject, body, cc, bcc, reply_to, from_),
+                json_body=message_body,
                 headers=IMMUTABLE_ID_HEADER,
             )
 
@@ -376,7 +481,11 @@ class GraphClient(ProviderClient):
             headers=IMMUTABLE_ID_HEADER,
             expect_json=False,
         )
-        return ProviderSendResult(message_id=draft_id, thread_id=draft.get("conversationId", draft_id))
+        return ProviderSendResult(
+            message_id=draft_id,
+            thread_id=draft.get("conversationId", draft_id),
+            labels=list(draft.get("categories") or []),
+        )
 
     def _build_message_body(
         self,
