@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -19,7 +20,7 @@ def account() -> Account:
 
 @pytest.mark.asyncio
 async def test_gmail_folders_include_system_labels_counts_and_colors(account: Account) -> None:
-    labels = {
+    labels: dict[str, dict[str, Any]] = {
         "INBOX": {"id": "INBOX", "name": "INBOX", "type": "system", "messagesTotal": 12, "messagesUnread": 3},
         "Label_1": {
             "id": "Label_1",
@@ -33,7 +34,7 @@ async def test_gmail_folders_include_system_labels_counts_and_colors(account: Ac
         "UNREAD": {"id": "UNREAD", "name": "UNREAD", "type": "system"},
     }
 
-    async def request(_, method, url):
+    async def request(_: Account, method: str, url: str) -> dict[str, Any]:
         assert method == "GET"
         return {"labels": list(labels.values())} if url == f"{GMAIL_API_BASE}/labels" else labels[url.rsplit("/", 1)[1]]
 
@@ -72,7 +73,7 @@ async def test_graph_lists_native_pages_and_flattens_hierarchy(account: Account,
     base = f"{GRAPH_API_BASE}/me/mailFolders"
     initial = f"{base}/p%2F1/childFolders" if params.parent_id else base
     next_link = f"{initial}?$skiptoken=next"
-    pages = {
+    pages: dict[str, dict[str, Any]] = {
         initial: {
             "value": [
                 {
@@ -91,7 +92,7 @@ async def test_graph_lists_native_pages_and_flattens_hierarchy(account: Account,
         },
     }
 
-    async def request(_, method, url, **kwargs):
+    async def request(_: Account, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         assert method == "GET" and kwargs["headers"] == IMMUTABLE_ID_HEADER
         if url == f"{base}/sentitems":
             return {"id": "localized"}
@@ -144,7 +145,7 @@ async def test_graph_resolves_system_folders_concurrently(account: Account) -> N
     started: set[str] = set()
     all_started = asyncio.Event()
 
-    async def request(_, method, url, **kwargs):
+    async def request(_: Account, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         if url == base:
             return {"value": [{"id": "sent-id", "displayName": "Enviados"}]}
         well_known = url.rsplit("/", 1)[1]
@@ -165,7 +166,7 @@ async def test_graph_does_not_return_incomplete_system_folder_attributes(account
     base = f"{GRAPH_API_BASE}/me/mailFolders"
     error = ProviderError("System folder lookup failed", status_code=status_code)
 
-    async def request(_, method, url, **kwargs):
+    async def request(_: Account, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         if url == base:
             return {"value": [{"id": "sent-id", "displayName": "Enviados"}]}
         if url == f"{base}/sentitems":

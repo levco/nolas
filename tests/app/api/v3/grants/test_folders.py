@@ -1,10 +1,12 @@
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 from urllib.parse import urlencode
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from starlette.types import Message
 
 from app.api.middlewares.authentication import get_current_app
@@ -23,13 +25,14 @@ def account() -> Account:
     return Account(uuid=uuid.uuid4(), email="owner@example.com", provider=AccountProvider.microsoft)
 
 
-async def request_folders(provider: Mock, grant_id: str, query: dict[str, object]) -> tuple[int, dict]:
+async def request_folders(provider: Mock, grant_id: str, query: dict[str, object]) -> tuple[int, dict[str, Any]]:
     app = FastAPI()
     app.include_router(router, prefix="/v3/grants")
     app.dependency_overrides[get_current_app] = lambda: App(id=1)
     for route in app.routes:
-        if getattr(route, "endpoint", None) is folders_api.list_folders:
+        if isinstance(route, APIRoute) and route.endpoint is folders_api.list_folders:
             dependency = next(dep for dep in route.dependant.dependencies if dep.name == "registry")
+            assert dependency.call is not None
             app.dependency_overrides[dependency.call] = lambda: Mock(get_client=lambda _: provider)
     responses: list[Message] = []
 
@@ -162,7 +165,7 @@ async def test_inaccessible_grant_never_reaches_provider(
     ],
 )
 async def test_invalid_cursor_and_fields_return_nylas_errors(
-    monkeypatch: pytest.MonkeyPatch, account: Account, query: dict
+    monkeypatch: pytest.MonkeyPatch, account: Account, query: dict[str, Any]
 ) -> None:
     monkeypatch.setattr(folders_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
     provider = Mock(list_folders=AsyncMock())
@@ -175,7 +178,7 @@ async def test_invalid_cursor_and_fields_return_nylas_errors(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query", [{"limit": 0}, {"limit": 201}, {"limit": "bad"}, {"single_level": "bad"}])
 async def test_invalid_query_is_rejected_before_provider(
-    monkeypatch: pytest.MonkeyPatch, account: Account, query: dict
+    monkeypatch: pytest.MonkeyPatch, account: Account, query: dict[str, Any]
 ) -> None:
     validate = AsyncMock(return_value=(account, None))
     monkeypatch.setattr(folders_api, "validate_grant_access", validate)
