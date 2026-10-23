@@ -1,0 +1,164 @@
+import uuid
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from app.controllers.providers.base import ListFoldersParams
+from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError
+from app.controllers.providers.google.gmail_client import GMAIL_API_BASE, GmailClient
+from app.controllers.providers.imap_adapter import ImapProviderAdapter
+from app.controllers.providers.microsoft.graph_client import GRAPH_API_BASE, IMMUTABLE_ID_HEADER, GraphClient
+from app.models.account import Account
+
+
+@pytest.fixture
+def account() -> Account:
+    return Account(uuid=uuid.uuid4(), email="owner@example.com")
+
+
+@pytest.mark.asyncio
+async def test_gmail_folders_include_system_labels_counts_and_colors(account: Account) -> None:
+    labels = {
+        "INBOX": {"id": "INBOX", "name": "INBOX", "type": "system", "messagesTotal": 12, "messagesUnread": 3},
+        "Label_1": {
+            "id": "Label_1",
+            "name": "Sent",
+            "type": "user",
+            "color": {
+                "backgroundColor": "#fb4c2f",
+                "textColor": "#ffffff",
+            },
+        },
+        "UNREAD": {"id": "UNREAD", "name": "UNREAD", "type": "system"},
+    }
+
+    async def request(_, method, url):
+        assert method == "GET"
+        return {"labels": list(labels.values())} if url == f"{GMAIL_API_BASE}/labels" else labels[url.rsplit("/", 1)[1]]
+
+    http = Mock(request=AsyncMock(side_effect=request))
+    folders = await GmailClient(http).list_folders(account, ListFoldersParams())
+    assert [folder.id for folder in folders] == ["INBOX", "Label_1", "UNREAD"]
+    assert folders[0].name == "Inbox" and folders[0].system_folder
+    assert folders[0].attributes == [r"\Inbox"]
+    assert (folders[0].total_count, folders[0].unread_count) == (12, 3)
+    assert folders[1].attributes == [] and not folders[1].system_folder
+    assert folders[1].background_color == "#fb4c2f" and folders[1].text_color == "#ffffff"
+    assert all(folder.grant_id == str(account.uuid) for folder in folders)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params", [ListFoldersParams(), ListFoldersParams(single_level=True), ListFoldersParams(parent_id="p/1")]
+)
+async def test_graph_lists_native_pages_and_flattens_hierarchy(account: Account, params: ListFoldersParams) -> None:
+    base = f"{GRAPH_API_BASE}/me/mailFolders"
+    initial = f"{base}/p%2F1/childFolders" if params.parent_id else base
+    next_link = f"{initial}?$skiptoken=next"
+    pages = {
+        initial: {
+            "value": [
+                {
+                    "id": "localized",
+                    "displayName": "Enviados",
+                    "childFolderCount": 1,
+                    "totalItemCount": 12,
+                    "unreadItemCount": 3,
+                }
+            ],
+            "@odata.nextLink": next_link,
+        },
+        next_link: {"value": [{"id": "custom", "displayName": "Inbox", "childFolderCount": 0}]},
+        f"{base}/localized/childFolders": {
+            "value": [{"id": "nested", "displayName": "Deals", "parentFolderId": "localized"}]
+        },
+    }
+
+    async def request(_, method, url, **kwargs):
+        assert method == "GET" and kwargs["headers"] == IMMUTABLE_ID_HEADER
+        if url == f"{base}/sentitems":
+            return {"id": "localized"}
+        if url in pages:
+            return pages[url]
+        raise ProviderNotFoundError()
+
+    http = Mock(request=AsyncMock(side_effect=request))
+    folders = await GraphClient(http).list_folders(account, params)
+    recursive = not params.single_level and not params.parent_id
+    assert [folder.id for folder in folders] == (
+        ["localized", "custom", "nested"] if recursive else ["localized", "custom"]
+    )
+    assert folders[0].attributes == [r"\Sent"]
+    assert folders[0].total_count == 12 and folders[0].unread_count == 3 and folders[0].child_count == 1
+    assert folders[1].attributes == [] and not folders[1].system_folder
+    if recursive:
+        assert folders[2].parent_id == "localized"
+    assert all(folder.grant_id == str(account.uuid) for folder in folders)
+
+
+@pytest.mark.asyncio
+async def test_graph_escapes_shared_mailbox_and_parent_and_includes_hidden_folders(account: Account) -> None:
+    http = Mock(request=AsyncMock(return_value={"value": []}))
+    await GraphClient(http).list_folders(
+        account,
+        ListFoldersParams(
+            shared_from="shared+box@example.com",
+            parent_id="a/b?#",
+            include_hidden_folders=True,
+        ),
+    )
+    call = http.request.await_args
+    assert call.args[2] == f"{GRAPH_API_BASE}/users/shared%2Bbox%40example.com/mailFolders/a%2Fb%3F%23/childFolders"
+    assert call.kwargs["params"]["includeHiddenFolders"] == "true"
+    assert call.kwargs["params"]["$top"] == "200"
+
+
+@pytest.mark.asyncio
+async def test_graph_rejects_pagination_links_to_another_server(account: Account) -> None:
+    http = Mock(request=AsyncMock(return_value={"value": [], "@odata.nextLink": "https://attacker.example/folders"}))
+    with pytest.raises(ProviderError, match="pagination URL"):
+        await GraphClient(http).list_folders(account, ListFoldersParams())
+    assert http.request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_imap_lists_every_folder_and_decodes_names(account: Account) -> None:
+    lines = [
+        b'(\\HasChildren) "/" INBOX',
+        b'(\\Sent) "/" "Enviados"',
+        b'(\\Trash) "/" Trash',
+        b'() NIL "&ZeVnLIqe-"',
+        b'() "/" "Deals/2026"',
+        b'() "/" "Escaped \\"quote\\""',
+        *[f'() "/" "Folder {index}"'.encode() for index in range(20)],
+        b"LIST completed",
+    ]
+    connection = Mock(list=AsyncMock(return_value=Mock(result="OK", lines=lines)))
+    manager = Mock(get_connection_or_fail=AsyncMock(return_value=connection), close_connection=AsyncMock())
+    folders = await ImapProviderAdapter(Mock(), manager).list_folders(account, ListFoldersParams())
+    assert len(folders) == 26
+    assert [folder.id for folder in folders[:6]] == [
+        "INBOX",
+        "Enviados",
+        "Trash",
+        "日本語",
+        "Deals/2026",
+        'Escaped "quote"',
+    ]
+    assert folders[0].attributes == [r"\Inbox"]
+    assert folders[1].attributes == [r"\Sent"]
+    assert folders[2].attributes == [r"\Trash"]
+    assert folders[3].attributes == [] and not folders[3].system_folder
+    manager.close_connection.assert_awaited_once_with(connection, account)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result,lines", [("NO", []), ("OK", [b"(invalid)"])])
+async def test_imap_failures_close_connection_and_do_not_return_fallback_folders(
+    account: Account, result: str, lines: list[bytes]
+) -> None:
+    connection = Mock(list=AsyncMock(return_value=Mock(result=result, lines=lines)))
+    manager = Mock(get_connection_or_fail=AsyncMock(return_value=connection), close_connection=AsyncMock())
+    with pytest.raises((ProviderError, ValueError)):
+        await ImapProviderAdapter(Mock(), manager).list_folders(account, ListFoldersParams())
+    manager.close_connection.assert_awaited_once_with(connection, account)

@@ -1,10 +1,12 @@
 import base64
 import logging
 import re
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
+from app.api.payloads.folders import Folder
 from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
@@ -16,6 +18,7 @@ from app.api.payloads.threads import Thread
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
+    ListFoldersParams,
     ListMessagesParams,
     ListMessagesResult,
     ListThreadsParams,
@@ -631,6 +634,71 @@ class GraphClient(ProviderClient):
             total_count=folder.get("totalItemCount"),
             unread_count=folder.get("unreadItemCount"),
         )
+
+    async def list_folders(self, account: Account, params: ListFoldersParams) -> list[Folder]:
+        mailbox = f"users/{quote(params.shared_from, safe='')}" if params.shared_from else "me"
+        base = f"{GRAPH_API_BASE}/{mailbox}/mailFolders"
+        url = f"{base}/{quote(params.parent_id, safe='')}/childFolders" if params.parent_id else base
+        pending = deque([url])
+        folders: list[Folder] = []
+        seen: set[str] = set()
+        query = {
+            "includeHiddenFolders": str(params.include_hidden_folders).lower(),
+            "$top": "200",
+            "$select": "id,displayName,parentFolderId,childFolderCount,totalItemCount,unreadItemCount",
+        }
+        while pending:
+            url = pending.popleft()
+            response = await self._http.request(account, "GET", url, params=query, headers=IMMUTABLE_ID_HEADER)
+            while True:
+                for raw in response.get("value", []):
+                    if raw["id"] in seen:
+                        continue
+                    seen.add(raw["id"])
+                    name = graph_folder_name(raw.get("displayName", raw["id"]))
+                    folders.append(
+                        Folder(
+                            id=raw["id"],
+                            grant_id=str(account.uuid),
+                            name=name,
+                            system_folder=False,
+                            parent_id=raw.get("parentFolderId"),
+                            child_count=raw.get("childFolderCount"),
+                            total_count=raw.get("totalItemCount"),
+                            unread_count=raw.get("unreadItemCount"),
+                        )
+                    )
+                    if not params.single_level and not params.parent_id and raw.get("childFolderCount", 0):
+                        pending.append(f"{base}/{quote(raw['id'], safe='')}/childFolders")
+                next_link = response.get("@odata.nextLink")
+                if not next_link:
+                    break
+                if not next_link.startswith(f"{base}/") and not next_link.startswith(f"{base}?"):
+                    raise ProviderError("Provider returned an invalid folder pagination URL.")
+                response = await self._http.request(account, "GET", next_link, headers=IMMUTABLE_ID_HEADER)
+        if folders:
+            attributes_by_id: dict[str, str] = {}
+            # Well-known IDs identify system folders even when their display names are localized or renamed.
+            for well_known, attribute in {
+                "inbox": r"\Inbox",
+                "sentitems": r"\Sent",
+                "drafts": r"\Drafts",
+                "deleteditems": r"\Trash",
+                "junkemail": r"\Junk",
+                "archive": r"\Archive",
+            }.items():
+                try:
+                    raw = await self._http.request(
+                        account, "GET", f"{base}/{well_known}", params={"$select": "id"}, headers=IMMUTABLE_ID_HEADER
+                    )
+                except ProviderNotFoundError:
+                    continue
+                attributes_by_id[raw["id"]] = attribute
+            for folder in folders:
+                if folder.id in attributes_by_id:
+                    folder.attributes = [attributes_by_id[folder.id]]
+                    folder.system_folder = True
+        return folders
 
     # --- Profile / subscription helpers (used by connect, notifications, and renewal worker) ---
 

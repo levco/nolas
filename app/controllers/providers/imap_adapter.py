@@ -1,6 +1,10 @@
 import logging
 from datetime import UTC, datetime
 
+from imapclient.imap_utf7 import decode as decode_imap_utf7
+from imapclient.response_parser import parse_response
+
+from app.api.payloads.folders import Folder
 from app.api.payloads.messages import AttachmentData, EmailAddress, Message, MessageAttachment
 from app.api.payloads.threads import Thread
 from app.controllers.email.email_controller import EmailController
@@ -9,6 +13,7 @@ from app.controllers.imap.folder_utils import FolderUtils
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
+    ListFoldersParams,
     ListMessagesParams,
     ListMessagesResult,
     ListThreadsParams,
@@ -17,6 +22,7 @@ from app.controllers.providers.base import (
     ProviderSendResult,
 )
 from app.controllers.providers.exceptions import ProviderError
+from app.controllers.providers.folders import folder_attributes
 from app.controllers.providers.threads import build_threads_from_messages, filter_threads
 from app.models.account import Account
 from app.utils.message_utils import MessageUtils
@@ -272,3 +278,33 @@ class ImapProviderAdapter(ProviderClient):
     async def get_folder(self, account: Account, folder_id: str) -> FolderData | None:
         # IMAP folder ids are the folder names themselves.
         return FolderData(id=folder_id, name=folder_id)
+
+    async def list_folders(self, account: Account, params: ListFoldersParams) -> list[Folder]:
+        connection = await self._connection_manager.get_connection_or_fail(account)
+        try:
+            response = await connection.list('""', "*")
+            if response.result != "OK":
+                raise ProviderError("IMAP folder listing failed.")
+            folders: list[Folder] = []
+            for line in response.lines:
+                if not line.startswith(b"("):
+                    continue
+                flags, _, raw_name = parse_response([line])
+                name = decode_imap_utf7(raw_name)
+                attributes: list[str] = []
+                for flag in flags:
+                    attributes.extend(folder_attributes(flag.decode("ascii")))
+                if not attributes:
+                    attributes = folder_attributes(name)
+                folders.append(
+                    Folder(
+                        id=name,
+                        name=name,
+                        grant_id=str(account.uuid),
+                        system_folder=bool(attributes),
+                        attributes=attributes,
+                    )
+                )
+            return folders
+        finally:
+            await self._connection_manager.close_connection(connection, account)

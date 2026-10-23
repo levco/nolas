@@ -6,6 +6,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from app.api.payloads.folders import Folder
 from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
@@ -17,6 +18,7 @@ from app.api.payloads.threads import Thread
 from app.controllers.providers.base import (
     AttachmentContent,
     FolderData,
+    ListFoldersParams,
     ListMessagesParams,
     ListMessagesResult,
     ListThreadsParams,
@@ -29,6 +31,7 @@ from app.controllers.providers.exceptions import (
     ProviderNotFoundError,
     ProviderRateLimitError,
 )
+from app.controllers.providers.folders import folder_attributes
 from app.controllers.providers.google.mapper import (
     decode_base64url,
     gmail_label_name,
@@ -388,6 +391,36 @@ class GmailClient(ProviderClient):
             unread_count=label.get("messagesUnread"),
             attributes=[label.get("type", "user")],
         )
+
+    async def list_folders(self, account: Account, params: ListFoldersParams) -> list[Folder]:
+        response = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels")
+
+        async def fetch_folder(label: dict[str, Any]) -> Folder:
+            raw = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels/{quote(label['id'], safe='')}")
+            name = gmail_label_name(raw["id"], raw.get("name"))
+            system = raw.get("type", label.get("type")) == "system"
+            color = raw.get("color", {})
+            return Folder(
+                id=raw["id"],
+                grant_id=str(account.uuid),
+                name=name,
+                system_folder=system,
+                attributes=folder_attributes(name) if system else [],
+                total_count=raw.get("messagesTotal"),
+                unread_count=raw.get("messagesUnread"),
+                background_color=color.get("backgroundColor"),
+                text_color=color.get("textColor"),
+            )
+
+        labels = response.get("labels", [])
+        folders: list[Folder] = []
+        for start in range(0, len(labels), FALLBACK_FETCH_CONCURRENCY):
+            folders.extend(
+                await asyncio.gather(
+                    *(fetch_folder(label) for label in labels[start : start + FALLBACK_FETCH_CONCURRENCY])
+                )
+            )
+        return folders
 
     # --- Notification / watch helpers (used by the notifications controller and renewal worker) ---
 

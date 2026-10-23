@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from app.api.payloads.folders import Folder
 from app.api.payloads.labels import CreateLabelRequest, Label, UpdateLabelRequest
 from app.api.payloads.messages import (
     AttachmentData,
@@ -83,6 +84,14 @@ class FolderData:
 
 
 @dataclass
+class ListFoldersParams:
+    include_hidden_folders: bool = False
+    parent_id: str | None = None
+    shared_from: str | None = None
+    single_level: bool = False
+
+
+@dataclass
 class AttachmentContent:
     data: bytes
     content_type: str
@@ -91,6 +100,10 @@ class AttachmentContent:
 
 class ProviderClient(ABC):
     """Provider-specific email operations, normalized to Nylas v3 shapes."""
+
+    @abstractmethod
+    async def list_folders(self, account: Account, params: ListFoldersParams) -> list[Folder]:
+        raise NotImplementedError
 
     async def list_labels(self, account: Account) -> list[Label]:
         raise ProviderError("Labels are not supported by this provider.", status_code=400)
