@@ -395,8 +395,11 @@ class GmailClient(ProviderClient):
     async def list_folders(self, account: Account, params: ListFoldersParams) -> list[Folder]:
         response = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels")
 
-        async def fetch_folder(label: dict[str, Any]) -> Folder:
-            raw = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels/{quote(label['id'], safe='')}")
+        async def fetch_folder(label: dict[str, Any]) -> Folder | None:
+            try:
+                raw = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/labels/{quote(label['id'], safe='')}")
+            except ProviderNotFoundError:
+                return None
             name = gmail_label_name(raw["id"], raw.get("name"))
             system = raw.get("type", label.get("type")) == "system"
             color = raw.get("color", {})
@@ -415,11 +418,10 @@ class GmailClient(ProviderClient):
         labels = response.get("labels", [])
         folders: list[Folder] = []
         for start in range(0, len(labels), FALLBACK_FETCH_CONCURRENCY):
-            folders.extend(
-                await asyncio.gather(
-                    *(fetch_folder(label) for label in labels[start : start + FALLBACK_FETCH_CONCURRENCY])
-                )
+            fetched = await asyncio.gather(
+                *(fetch_folder(label) for label in labels[start : start + FALLBACK_FETCH_CONCURRENCY])
             )
+            folders.extend(folder for folder in fetched if folder is not None)
         return folders
 
     # --- Notification / watch helpers (used by the notifications controller and renewal worker) ---

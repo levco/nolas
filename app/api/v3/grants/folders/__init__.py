@@ -1,6 +1,8 @@
 import logging
 import uuid
 from collections.abc import Callable, Coroutine
+from email.errors import HeaderParseError
+from email.headerregistry import Address
 from typing import Annotated, Any
 
 from dependency_injector.wiring import Provide, inject
@@ -74,18 +76,25 @@ async def list_folders(
     if fields is not None and not fields <= Folder.model_fields.keys():
         return create_error_response("invalid_request_error", "Unknown folder field in select.", 400)
 
-    if shared_from and account.provider == AccountProvider.microsoft and "@" not in shared_from:
+    if shared_from is not None and account.provider == AccountProvider.microsoft:
         try:
-            uuid.UUID(shared_from)
-        except ValueError:
+            if "@" in shared_from:
+                address = Address(addr_spec=shared_from)
+                if not address.username or not address.domain:
+                    raise ValueError("Missing email username or domain")
+                shared_from = address.addr_spec
+            else:
+                uuid.UUID(shared_from)
+        except (ValueError, HeaderParseError):
             return create_error_response(
                 "invalid_request_error", "shared_from must be an email address or grant ID.", 400
             )
-        shared_account, error = await validate_grant_access(app.id, shared_from)
-        if error:
-            return error
-        assert shared_account is not None
-        shared_from = shared_account.email
+        if "@" not in shared_from:
+            shared_account, error = await validate_grant_access(app.id, shared_from)
+            if error:
+                return error
+            assert shared_account is not None
+            shared_from = shared_account.email
 
     try:
         # shortcut: reload folders for each page; use provider cursors if large mailboxes make this costly.

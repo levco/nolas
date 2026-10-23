@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, Mock
 
@@ -45,6 +46,22 @@ async def test_gmail_folders_include_system_labels_counts_and_colors(account: Ac
     assert folders[1].attributes == [] and not folders[1].system_folder
     assert folders[1].background_color == "#fb4c2f" and folders[1].text_color == "#ffffff"
     assert all(folder.grant_id == str(account.uuid) for folder in folders)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 403, 429])
+async def test_gmail_skips_deleted_labels_but_propagates_other_errors(account: Account, status_code: int) -> None:
+    error = (
+        ProviderNotFoundError() if status_code == 404 else ProviderError("Provider failure", status_code=status_code)
+    )
+    http = Mock(request=AsyncMock(side_effect=[{"labels": [{"id": "Label_1"}]}, error]))
+    client = GmailClient(http)
+    if status_code == 404:
+        assert await client.list_folders(account, ListFoldersParams()) == []
+    else:
+        with pytest.raises(ProviderError) as exc:
+            await client.list_folders(account, ListFoldersParams())
+        assert exc.value is error
 
 
 @pytest.mark.asyncio
@@ -122,6 +139,45 @@ async def test_graph_rejects_pagination_links_to_another_server(account: Account
 
 
 @pytest.mark.asyncio
+async def test_graph_resolves_system_folders_concurrently(account: Account) -> None:
+    base = f"{GRAPH_API_BASE}/me/mailFolders"
+    started: set[str] = set()
+    all_started = asyncio.Event()
+
+    async def request(_, method, url, **kwargs):
+        if url == base:
+            return {"value": [{"id": "sent-id", "displayName": "Enviados"}]}
+        well_known = url.rsplit("/", 1)[1]
+        started.add(well_known)
+        if len(started) == 6:
+            all_started.set()
+        await all_started.wait()
+        return {"id": "sent-id" if well_known == "sentitems" else well_known}
+
+    client = GraphClient(Mock(request=AsyncMock(side_effect=request)))
+    folders = await asyncio.wait_for(client.list_folders(account, ListFoldersParams()), timeout=1)
+    assert folders[0].attributes == [r"\Sent"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [403, 429, 503])
+async def test_graph_does_not_return_incomplete_system_folder_attributes(account: Account, status_code: int) -> None:
+    base = f"{GRAPH_API_BASE}/me/mailFolders"
+    error = ProviderError("System folder lookup failed", status_code=status_code)
+
+    async def request(_, method, url, **kwargs):
+        if url == base:
+            return {"value": [{"id": "sent-id", "displayName": "Enviados"}]}
+        if url == f"{base}/sentitems":
+            raise error
+        raise ProviderNotFoundError()
+
+    with pytest.raises(ProviderError) as exc:
+        await GraphClient(Mock(request=AsyncMock(side_effect=request))).list_folders(account, ListFoldersParams())
+    assert exc.value is error
+
+
+@pytest.mark.asyncio
 async def test_imap_lists_every_folder_and_decodes_names(account: Account) -> None:
     lines = [
         b'(\\HasChildren) "/" INBOX',
@@ -141,7 +197,7 @@ async def test_imap_lists_every_folder_and_decodes_names(account: Account) -> No
         "INBOX",
         "Enviados",
         "Trash",
-        "日本語",
+        "&ZeVnLIqe-",
         "Deals/2026",
         'Escaped "quote"',
     ]
@@ -149,7 +205,18 @@ async def test_imap_lists_every_folder_and_decodes_names(account: Account) -> No
     assert folders[1].attributes == [r"\Sent"]
     assert folders[2].attributes == [r"\Trash"]
     assert folders[3].attributes == [] and not folders[3].system_folder
+    assert folders[3].name == "日本語"
     manager.close_connection.assert_awaited_once_with(connection, account)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mailbox,expected", [(b"123", "123"), (b"00123", "00123"), (b'"123"', "123")])
+async def test_imap_numeric_mailboxes_keep_string_ids(account: Account, mailbox: bytes, expected: str) -> None:
+    connection = Mock(list=AsyncMock(return_value=Mock(result="OK", lines=[b'() "/" ' + mailbox])))
+    manager = Mock(get_connection_or_fail=AsyncMock(return_value=connection), close_connection=AsyncMock())
+    folders = await ImapProviderAdapter(Mock(), manager).list_folders(account, ListFoldersParams())
+    assert folders[0].id == expected
+    assert folders[0].name == expected
 
 
 @pytest.mark.asyncio

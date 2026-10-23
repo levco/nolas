@@ -290,7 +290,8 @@ class ImapProviderAdapter(ProviderClient):
                 if not line.startswith(b"("):
                     continue
                 flags, _, raw_name = parse_response([line])
-                name = decode_imap_utf7(raw_name)
+                folder_id = raw_name.decode("utf-8") if isinstance(raw_name, bytes) else str(raw_name)
+                name = decode_imap_utf7(raw_name if isinstance(raw_name, bytes) else folder_id)
                 attributes: list[str] = []
                 for flag in flags:
                     attributes.extend(folder_attributes(flag.decode("ascii")))
@@ -298,7 +299,7 @@ class ImapProviderAdapter(ProviderClient):
                     attributes = folder_attributes(name)
                 folders.append(
                     Folder(
-                        id=name,
+                        id=folder_id,
                         name=name,
                         grant_id=str(account.uuid),
                         system_folder=bool(attributes),

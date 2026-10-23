@@ -151,6 +151,14 @@ async def test_inaccessible_grant_never_reaches_provider(
         {"select": "missing"},
         {"select": ""},
         {"shared_from": "invalid-grant"},
+        {"shared_from": "bad@@example.com"},
+        {"shared_from": "user@"},
+        {"shared_from": "@example.com"},
+        {"shared_from": "one@example.com,two@example.com"},
+        {"shared_from": "Name <one@example.com>"},
+        {"shared_from": "a b@example.com"},
+        {"shared_from": "one@example.com\r\nBcc:two@example.com"},
+        {"shared_from": ""},
     ],
 )
 async def test_invalid_cursor_and_fields_return_nylas_errors(

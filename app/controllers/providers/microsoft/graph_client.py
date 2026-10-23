@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import re
@@ -677,23 +678,29 @@ class GraphClient(ProviderClient):
                     raise ProviderError("Provider returned an invalid folder pagination URL.")
                 response = await self._http.request(account, "GET", next_link, headers=IMMUTABLE_ID_HEADER)
         if folders:
-            attributes_by_id: dict[str, str] = {}
+
+            async def get_attribute(well_known: str, attribute: str) -> tuple[str, str] | None:
+                try:
+                    raw = await self._http.request(
+                        account, "GET", f"{base}/{well_known}", params={"$select": "id"}, headers=IMMUTABLE_ID_HEADER
+                    )
+                except ProviderNotFoundError:
+                    return None
+                return raw["id"], attribute
+
             # Well-known IDs identify system folders even when their display names are localized or renamed.
-            for well_known, attribute in {
+            well_known_attributes = {
                 "inbox": r"\Inbox",
                 "sentitems": r"\Sent",
                 "drafts": r"\Drafts",
                 "deleteditems": r"\Trash",
                 "junkemail": r"\Junk",
                 "archive": r"\Archive",
-            }.items():
-                try:
-                    raw = await self._http.request(
-                        account, "GET", f"{base}/{well_known}", params={"$select": "id"}, headers=IMMUTABLE_ID_HEADER
-                    )
-                except ProviderNotFoundError:
-                    continue
-                attributes_by_id[raw["id"]] = attribute
+            }
+            resolved = await asyncio.gather(
+                *(get_attribute(well_known, attribute) for well_known, attribute in well_known_attributes.items())
+            )
+            attributes_by_id = dict(item for item in resolved if item is not None)
             for folder in folders:
                 if folder.id in attributes_by_id:
                     folder.attributes = [attributes_by_id[folder.id]]
