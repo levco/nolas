@@ -13,6 +13,11 @@ class Folder(BaseModel):
     attributes: list[str] = Field(default_factory=list)
     total_count: int | None = None
     unread_count: int | None = None
+    object: str = "folder"
+    parent_id: str | None = None
+    child_count: int | None = None
+    background_color: str | None = None
+    text_color: str | None = None
 
 
 class FolderResponse(BaseModel):
@@ -20,3 +25,9 @@ class FolderResponse(BaseModel):
 
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     data: Folder
+
+
+class FolderListResponse(BaseModel):
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    data: list[Folder]
+    next_cursor: str | None = None
