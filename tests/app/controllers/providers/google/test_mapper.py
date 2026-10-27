@@ -1,5 +1,8 @@
 import base64
 import uuid
+from typing import Any
+
+import pytest
 
 from app.controllers.providers.google.mapper import (
     extract_gmail_attachments,
@@ -14,7 +17,7 @@ def _b64(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode()).decode()
 
 
-def _gmail_message() -> dict:
+def _gmail_message() -> dict[str, Any]:
     return {
         "id": "18d5a4b2c3e4f567",
         "threadId": "18d5a4b2c3e4f000",
@@ -62,6 +65,59 @@ class TestMapGmailMessage:
         assert message.unread is True
         assert message.starred is False
         assert message.object == "message"
+
+    @pytest.mark.parametrize("mime_type", ["text/html", "text/plain"])
+    @pytest.mark.parametrize(
+        "attached_message",
+        [
+            {"mimeType": "message/rfc822"},
+            {"mimeType": "message/rfc822", "filename": "original.eml"},
+            {"mimeType": "message/global"},
+            {"mimeType": "multipart/mixed", "filename": "original.eml"},
+            {
+                "mimeType": "multipart/mixed",
+                "headers": [{"name": "content-disposition", "value": "Attachment; filename=original.eml"}],
+            },
+        ],
+    )
+    def test_bounce_body_ignores_attached_original(self, mime_type: str, attached_message: dict[str, Any]) -> None:
+        raw = _gmail_message()
+        body = "<p>550 5.1.1 User unknown</p>" if mime_type == "text/html" else "550 5.1.1 User unknown"
+        raw["payload"]["mimeType"] = "multipart/report"
+        raw["payload"]["parts"] = [
+            {"mimeType": mime_type, "body": {"data": _b64(body)}},
+            {"mimeType": "message/delivery-status"},
+            {
+                **attached_message,
+                "parts": [{"mimeType": "text/html", "body": {"data": _b64("<p>Original outreach</p>")}}],
+            },
+        ]
+
+        assert map_gmail_message(raw, GRANT_ID).body == body
+
+    def test_body_preserves_inline_quoted_history(self) -> None:
+        raw = _gmail_message()
+        body = '<p>Delivery failed</p><div class="gmail_quote"><blockquote>Original outreach</blockquote></div>'
+        raw["payload"]["parts"][1]["body"]["data"] = _b64(body)
+
+        assert map_gmail_message(raw, GRANT_ID).body == body
+
+    def test_body_uses_first_html_part_in_mime_order(self) -> None:
+        raw = _gmail_message()
+        raw["payload"]["parts"].append({"mimeType": "text/html", "body": {"data": _b64("<p>Later HTML part</p>")}})
+
+        assert map_gmail_message(raw, GRANT_ID).body == "<p>html body</p>"
+
+    def test_body_does_not_fall_back_to_attached_message(self) -> None:
+        raw = _gmail_message()
+        raw["payload"]["parts"] = [
+            {
+                "mimeType": "message/rfc822",
+                "parts": [{"mimeType": "text/html", "body": {"data": _b64("<p>Original outreach</p>")}}],
+            }
+        ]
+
+        assert map_gmail_message(raw, GRANT_ID).body == ""
 
     def test_addresses(self) -> None:
         message = map_gmail_message(_gmail_message(), GRANT_ID)

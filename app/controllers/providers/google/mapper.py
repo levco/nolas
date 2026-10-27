@@ -72,13 +72,20 @@ def _header(headers: list[dict[str, str]], name: str) -> str | None:
 
 
 def extract_gmail_body(payload: dict[str, Any]) -> str:
-    """Prefer the HTML part; fall back to plain text."""
+    """Return the full message body, preferring HTML and excluding attached messages."""
     html = ""
     text = ""
-    for part in _walk_parts(payload):
+    stack = [payload]
+    while stack:
+        part = stack.pop()
         mime_type = part.get("mimeType", "")
+        disposition = (_header(part.get("headers", []), "Content-Disposition") or "").split(";", 1)[0].strip().lower()
+        # A returned original message must not replace a delivery report's own body.
+        if part.get("filename") or disposition == "attachment" or mime_type.startswith("message/"):
+            continue
+        stack.extend(reversed(part.get("parts", [])))
         data = part.get("body", {}).get("data")
-        if not data or part.get("filename"):
+        if not data:
             continue
         if mime_type == "text/html" and not html:
             html = _decode_body(data)
