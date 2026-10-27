@@ -81,7 +81,7 @@ def extract_gmail_body(payload: dict[str, Any]) -> str:
         mime_type = part.get("mimeType", "")
         disposition = (_header(part.get("headers", []), "Content-Disposition") or "").split(";", 1)[0].strip().lower()
         # A returned original message must not replace a delivery report's own body.
-        if part.get("filename") or disposition == "attachment" or mime_type.startswith("message/"):
+        if part.get("filename") or disposition == "attachment" or mime_type.lower().startswith("message/"):
             continue
         stack.extend(reversed(part.get("parts", [])))
         data = part.get("body", {}).get("data")
