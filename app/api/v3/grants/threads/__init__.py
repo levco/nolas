@@ -102,7 +102,14 @@ async def list_threads(
     starred: bool | None = Query(None),
     has_attachment: bool | None = Query(None),
     search_query_native: str | None = Query(None),
-    select: str | None = Query(None, description="Comma-separated top-level thread fields to return"),
+    select: str | None = Query(
+        None,
+        description=(
+            "Comma-separated top-level thread fields to return. When set, each object in data is a partial Thread "
+            "containing only the selected fields; unselected fields are omitted even if required by the Thread schema. "
+            "The response envelope is unchanged. When omitted, full Thread objects are returned."
+        ),
+    ),
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
 ) -> ThreadListResponse | JSONResponse:
