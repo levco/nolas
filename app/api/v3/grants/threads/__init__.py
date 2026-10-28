@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.middlewares.authentication import get_current_app
 from app.api.payloads.error import APIError
-from app.api.payloads.threads import ThreadListResponse, ThreadResponse
+from app.api.payloads.threads import Thread, ThreadListResponse, ThreadResponse
 from app.api.utils.errors import create_error_response, provider_error_response, validate_grant_access
 from app.container import ApplicationContainer
 from app.controllers.providers.base import ListThreadsParams
@@ -102,6 +102,7 @@ async def list_threads(
     starred: bool | None = Query(None),
     has_attachment: bool | None = Query(None),
     search_query_native: str | None = Query(None),
+    select: str | None = Query(None, description="Comma-separated top-level thread fields to return"),
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
 ) -> ThreadListResponse | JSONResponse:
@@ -110,6 +111,10 @@ async def list_threads(
     if error_response:
         return error_response
     assert account is not None  # account is guaranteed to be not None when error_response is None
+
+    fields = {name.strip() for name in select.split(",")} if select is not None else None
+    if fields is not None and not fields <= Thread.model_fields.keys():
+        return create_error_response("invalid_request_error", "Unknown thread field in select.", 400)
 
     parsed_any_email = [email.strip() for email in any_email.split(",") if email.strip()] if any_email else []
     if len(parsed_any_email) > 25:
@@ -143,7 +148,16 @@ async def list_threads(
 
     try:
         result = await registry.get_client(account).list_threads(account, params)
-        return ThreadListResponse(request_id=str(uuid.uuid4()), data=result.threads, next_cursor=result.next_cursor)
+        response = ThreadListResponse(request_id=str(uuid.uuid4()), data=result.threads, next_cursor=result.next_cursor)
+        if fields is not None:
+            return JSONResponse(
+                content=response.model_dump(
+                    include={"request_id": True, "data": {"__all__": fields}, "next_cursor": True},
+                    exclude_none=True,
+                    by_alias=True,
+                )
+            )
+        return response
     except ProviderError as e:
         return provider_error_response(e)
     except Exception:
