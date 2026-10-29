@@ -81,7 +81,9 @@ class MailboxThreadController:
         ):
             return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
         state = await self._thread_repo.get_state(account.id)
-        if account.provider == AccountProvider.microsoft and state is not None and state.provider_state:
+        if account.provider == AccountProvider.microsoft and state is not None:
+            if not state.provider_state:
+                return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
             progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
             folder = {"inbox": progress.inbox_id, "sent": progress.sent_id, "sentitems": progress.sent_id}.get(
                 params.in_.lower(), params.in_

@@ -253,6 +253,8 @@ async def test_provider_pagination_survives_index_becoming_ready(
     params = ListThreadsParams(in_="INBOX", limit=10)
     first = await controller.subject.list_threads(account, params)
     state.phase = MailboxThreadIndexPhase.ready
+    if provider == AccountProvider.microsoft:
+        state.provider_state = MicrosoftThreadIndexProgress(inbox_id="INBOX", sent_id="SENT").model_dump()
     second_params = replace(params, page_token=first.next_cursor)
     second = await controller.subject.list_threads(account, second_params)
     assert first is expected[0] and second is expected[1]
@@ -541,6 +543,33 @@ async def test_microsoft_pages_are_globally_ordered_without_any_provider_calls(
     controller.registry.get_graph.assert_not_called()
     controller.registry.get_gmail.assert_not_called()
     controller.registry.get_client.assert_not_called()
+    controller.job_repo.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folder", ["INBOX", "SENT", "custom-folder"])
+@pytest.mark.parametrize("page_token", [None, "provider-next", "index:previous"])
+async def test_microsoft_uninitialized_folders_keep_provider_pagination_despite_old_cached_threads(
+    microsoft_controller: ControllerFixture, account: Account, folder: str, page_token: str | None
+) -> None:
+    controller = microsoft_controller
+    state = controller.thread_repo.get_state.return_value
+    state.phase = MailboxThreadIndexPhase.backfill
+    state.provider_state = None
+    controller.thread_repo.has_two_month_history.return_value = True
+    controller.thread_repo.page.return_value = [reference("old-thread", 100)]
+    expected = ListThreadsResult([], "provider-next")
+    provider = AsyncMock(list_threads=AsyncMock(return_value=expected))
+    controller.registry.get_client.return_value = provider
+    params = ListThreadsParams(in_=folder, page_token=page_token)
+
+    assert await controller.subject.list_threads(account, params) is expected
+
+    provider.list_threads.assert_awaited_once_with(
+        account, replace(params, page_token=None) if page_token == "index:previous" else params
+    )
+    controller.thread_repo.page.assert_not_awaited()
+    controller.thread_repo.has_two_month_history.assert_not_awaited()
     controller.job_repo.enqueue.assert_not_awaited()
 
 
