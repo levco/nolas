@@ -1,6 +1,9 @@
 import asyncio
 import logging
 from contextlib import nullcontext
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
 from typing import Any
 
 import aiohttp
@@ -10,12 +13,28 @@ from app.controllers.providers.exceptions import (
     ProviderError,
     ProviderNotFoundError,
     ProviderRateLimitError,
+    is_rate_limit_response,
 )
 from app.controllers.providers.token_service import TokenService
 from app.controllers.providers.microsoft.concurrency_limiter import MicrosoftConcurrencyLimiter
 from app.models.account import Account
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_after_seconds(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            return max(0, ceil((retry_at - datetime.now(UTC)).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 class AuthorizedHttpClient:
@@ -111,8 +130,11 @@ class AuthorizedHttpClient:
             raise ProviderAuthError(f"Provider rejected credentials: {body_text[:500]}")
         if response.status == 404:
             raise ProviderNotFoundError()
-        if response.status == 429 or (response.status == 403 and "rate" in body_text.lower()):
-            raise ProviderRateLimitError(f"Rate limited: {body_text[:500]}")
+        if is_rate_limit_response(response.status, body_text):
+            raise ProviderRateLimitError(
+                f"Rate limited: {body_text[:500]}",
+                retry_after_seconds=_retry_after_seconds(response.headers.get("Retry-After")),
+            )
         raise ProviderError(
             f"Provider request failed ({response.status}): {body_text[:1000]}", status_code=response.status
         )

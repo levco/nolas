@@ -1,11 +1,15 @@
 import logging
+from datetime import timedelta
 from typing import Any
 
 from app.controllers.notifications.bounce import detect_bounce
+from app.controllers.jobs.payloads import MailboxThreadIndexJobPayload
+from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.controllers.providers.exceptions import (
     ProviderAuthError,
     ProviderError,
     ProviderNotFoundError,
+    ProviderRateLimitError,
 )
 from app.controllers.providers.google.gmail_client import GmailClient
 from app.controllers.providers.microsoft.graph_client import GraphClient
@@ -14,6 +18,7 @@ from app.models.job import JobType
 from app.repos.account import AccountRepo
 from app.repos.email import EmailRepo
 from app.repos.job import JobRepo
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +36,14 @@ class IncomingNotificationController:
         job_repo: JobRepo,
         gmail_client: GmailClient,
         graph_client: GraphClient,
+        mailbox_thread_controller: MailboxThreadController,
     ) -> None:
         self._account_repo = account_repo
         self._email_repo = email_repo
         self._job_repo = job_repo
         self._gmail = gmail_client
         self._graph = graph_client
+        self._mailbox_thread_controller = mailbox_thread_controller
 
     # --- Google ---
 
@@ -60,6 +67,8 @@ class IncomingNotificationController:
                 logger.info(f"Processed account: {account.email}")
             except ProviderAuthError:
                 logger.warning(f"Auth failure processing Gmail notification for {account.email}")
+            except ProviderRateLimitError:
+                raise
             except Exception:
                 logger.exception(f"Failed to process Gmail notification for {account.email}")
 
@@ -83,9 +92,12 @@ class IncomingNotificationController:
         latest_history_id = str(notified_history_id)
         last_entry_id: str | None = None
         exhausted = False
+        changed_thread_ids: set[str] = set()
         try:
             for _ in range(MAX_HISTORY_PAGES):
                 history = await self._gmail.list_history(account, str(start_history_id), page_token)
+                if settings.use_thread_index:
+                    changed_thread_ids.update(MailboxThreadController.history_thread_ids(history))
                 latest_history_id = str(history.get("historyId", latest_history_id))
                 for entry in history.get("history", []):
                     if entry.get("id"):
@@ -110,12 +122,17 @@ class IncomingNotificationController:
                     exhausted = True
                     break
         except ProviderNotFoundError:
+            if settings.use_thread_index:
+                await self._mailbox_thread_controller.rebuild(account.id)
             # startHistoryId too old — re-prime from the current profile.
             profile = await self._gmail.get_profile(account)
             context["history_id"] = str(profile.get("historyId", notified_history_id))
             await self._account_repo.update(account, {"provider_context": context}, do_commit=False)
             logger.warning(f"Gmail history expired for {account.email}; cursor reset")
             return
+
+        if settings.use_thread_index and changed_thread_ids:
+            await self._refresh_index_threads(account, sorted(changed_thread_ids))
 
         # A newly-added message can also have label records in the same history
         # window. Emit one event with its latest state, with message.created taking
@@ -172,6 +189,9 @@ class IncomingNotificationController:
             return
 
         change_type = notification.get("changeType")
+        if change_type == "deleted" and settings.use_thread_index:
+            await self._mailbox_thread_controller.refresh_microsoft_message(account, message_id)
+            return
         event_type = {"created": "message.created", "updated": "message.updated"}.get(
             change_type if isinstance(change_type, str) else ""
         )
@@ -196,6 +216,19 @@ class IncomingNotificationController:
 
     # --- Shared ---
 
+    async def _refresh_index_threads(self, account: Account, thread_ids: list[str]) -> None:
+        try:
+            await self._mailbox_thread_controller.refresh_threads(account, thread_ids)
+        except Exception as exc:
+            delay = max(300, exc.retry_after_seconds or 0) if isinstance(exc, ProviderRateLimitError) else 5
+            payload = MailboxThreadIndexJobPayload(account_id=account.id, thread_ids=thread_ids)
+            await self._job_repo.enqueue(
+                JobType.mailbox_thread_index,
+                payload.model_dump(),
+                available_at=await self._job_repo.db_now() + timedelta(seconds=delay),
+            )
+            logger.warning("Deferred thread cache refresh for account %s: %s", account.id, exc)
+
     async def _emit_message_event(
         self,
         account: Account,
@@ -209,12 +242,16 @@ class IncomingNotificationController:
         except ProviderNotFoundError:
             return
         except ProviderError as e:
-            if provider == AccountProvider.microsoft and (e.status_code == 429 or e.status_code >= 500):
+            if e.status_code == 429 or (provider == AccountProvider.microsoft and e.status_code >= 500):
                 raise
             logger.warning(f"Could not fetch message {message_id} for {account.email}: {e.message}")
             return
         if message is None:
+            if provider == AccountProvider.microsoft and settings.use_thread_index:
+                await self._mailbox_thread_controller.refresh_microsoft_message(account, message_id)
             return
+        if provider == AccountProvider.microsoft and settings.use_thread_index:
+            await self._refresh_index_threads(account, [message.thread_id])
         if provider == AccountProvider.microsoft and not message.folders:
             return
 

@@ -34,6 +34,7 @@ from app.controllers.providers.exceptions import (
 )
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.microsoft.mapper import (
+    _to_epoch,
     graph_folder_name,
     map_graph_attachment,
     map_graph_message,
@@ -365,6 +366,45 @@ class GraphClient(ProviderClient):
             return None
         threads = build_threads_from_messages(messages, unread_from_latest=True)
         return threads[0] if threads else None
+
+    async def get_thread_messages(self, account: Account, thread_id: str) -> list[Message]:
+        params = ListMessagesParams(thread_id=thread_id, limit=100)
+        messages: list[Message] = []
+        seen: set[str] = set()
+        while True:
+            response = await self._list_thread_messages_raw(account, params)
+            messages.extend(self._build_thread_messages(account, response))
+            next_link = response.get("@odata.nextLink")
+            if not next_link:
+                return messages
+            if next_link in seen:
+                raise ProviderError("Microsoft returned a repeated thread page token.")
+            seen.add(next_link)
+            params.page_token = encode_cursor(next_link)
+
+    async def list_thread_changes(
+        self, account: Account, folder_id: str, cursor: str | None = None, *, received_after: int | None = None
+    ) -> dict[str, Any]:
+        # Date-filtered delta queries stop at 5,000 messages; filter metadata locally before hydration.
+        params: dict[str, Any] = {"$select": "id,conversationId,receivedDateTime,sentDateTime", "$top": 50}
+        response = dict(
+            await self._http.request(
+                account,
+                "GET",
+                cursor or f"{GRAPH_API_BASE}/me/mailFolders/{quote(folder_id, safe='')}/messages/delta",
+                params=None if cursor else params,
+                headers={"Prefer": 'IdType="ImmutableId", odata.maxpagesize=50'},
+            )
+        )
+        if received_after is not None:
+            response["value"] = [
+                entry
+                for entry in response.get("value", [])
+                if "@removed" in entry
+                or not (entry.get("receivedDateTime") or entry.get("sentDateTime"))
+                or _to_epoch(entry.get("receivedDateTime") or entry.get("sentDateTime")) >= received_after
+            ]
+        return response
 
     def _build_list_result(
         self, account: Account, response: dict[str, Any], params: ListMessagesParams
@@ -724,7 +764,7 @@ class GraphClient(ProviderClient):
                 "POST",
                 f"{GRAPH_API_BASE}/subscriptions",
                 json_body={
-                    "changeType": "created,updated",
+                    "changeType": "created,updated,deleted",
                     "notificationUrl": notification_url,
                     "resource": "/me/messages",
                     "expirationDateTime": expiration,

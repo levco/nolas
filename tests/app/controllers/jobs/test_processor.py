@@ -1,13 +1,15 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.controllers.jobs.processor import JobProcessorController
+from app.controllers.providers.exceptions import ProviderRateLimitError
 from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobStatus, JobType
+from app.repos.job import JobRepo
 from settings import settings
 
 
@@ -24,11 +26,104 @@ def _make_controller() -> tuple[JobProcessorController, AsyncMock, AsyncMock, As
         account_repo=account_repo,
         webhook_sender=webhook_sender,
         renewal_alerts=AsyncMock(),
+        mailbox_thread_controller=AsyncMock(),
     )
     return controller, job_repo, incoming_notification_controller, subscription_manager, account_repo, webhook_sender
 
 
 class TestJobProcessorController:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hint,delay", [(None, 300), (120, 300), (900, 900)])
+    async def test_quota_errors_schedule_minutes_later_instead_of_completing(
+        self, hint: int | None, delay: int
+    ) -> None:
+        controller, job_repo, _, _, _, _ = _make_controller()
+        error = ProviderRateLimitError("Quota exceeded", retry_after_seconds=hint)
+        job = Job(
+            id=1,
+            type=JobType.mailbox_thread_index,
+            status=JobStatus.processing,
+            payload={"account_id": 7},
+            attempts=0,
+            max_attempts=5,
+        )
+        with patch.object(controller, "_dispatch", AsyncMock(side_effect=error)):
+            await controller._process_one(job)
+        job_repo.mark_retry_or_failed.assert_awaited_once_with(
+            job, str(error), retry_delay_seconds=delay, count_attempt=False
+        )
+        job_repo.mark_completed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("attempts", [0, 4])
+    async def test_repeated_quota_errors_preserve_failure_budget_and_payload(self, attempts: int) -> None:
+        repo = JobRepo()
+        now = datetime(2026, 10, 29, tzinfo=timezone.utc)
+        job = Job(
+            id=1,
+            type=JobType.mailbox_thread_index,
+            status=JobStatus.processing,
+            payload={"account_id": 7},
+            attempts=attempts,
+            max_attempts=5,
+            locked_by="worker",
+            locked_at=now,
+        )
+        with patch.object(repo, "db_now", AsyncMock(return_value=now)), patch.object(repo, "flush", AsyncMock()):
+            for _ in range(7):
+                job.status = JobStatus.processing
+                job.locked_by, job.locked_at = "worker", now
+                await repo.mark_retry_or_failed(job, "Quota exceeded", retry_delay_seconds=300, count_attempt=False)
+                assert job.status == JobStatus.pending
+                assert job.available_at == now + timedelta(minutes=5)
+                assert job.payload == {"account_id": 7} and job.attempts == attempts
+                assert job.locked_by is None and job.locked_at is None
+                assert job.completed_at is None and job.last_error == "Quota exceeded"
+            await repo.mark_retry_or_failed(job, "Other failure", retry_delay_seconds=5)
+        assert job.attempts == attempts + 1
+        assert job.status == (JobStatus.failed if attempts == 4 else JobStatus.pending)
+
+    @pytest.mark.asyncio
+    async def test_quota_retry_releases_worker_to_process_the_next_job(self) -> None:
+        controller, job_repo, _, _, _, _ = _make_controller()
+        now = datetime(2026, 10, 29, tzinfo=timezone.utc)
+        limited = Job(
+            id=1,
+            type=JobType.mailbox_thread_index,
+            status=JobStatus.processing,
+            payload={"account_id": 7},
+            attempts=0,
+            max_attempts=5,
+            locked_by="worker",
+            locked_at=now,
+        )
+        other = Job(id=2, type=JobType.google_notification, status=JobStatus.processing)
+        repo = JobRepo()
+
+        async def retry(job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool) -> None:
+            await repo.mark_retry_or_failed(job, error, retry_delay_seconds, count_attempt=count_attempt)
+
+        async def dispatch(job: Job) -> None:
+            if job.id == limited.id:
+                raise ProviderRateLimitError("Quota exceeded")
+            assert limited.status == JobStatus.pending
+            assert limited.available_at == now + timedelta(minutes=5)
+            assert limited.locked_at is None and limited.locked_by is None
+            assert limited.attempts == 0
+            job_repo.commit.assert_awaited_once()
+
+        job_repo.requeue_stale_processing.return_value = 0
+        job_repo.claim_batch.return_value = [limited, other]
+        job_repo.mark_retry_or_failed.side_effect = retry
+        with (
+            patch.object(repo, "db_now", AsyncMock(return_value=now)),
+            patch.object(repo, "flush", AsyncMock()),
+            patch.object(controller, "_dispatch", AsyncMock(side_effect=dispatch)),
+        ):
+            assert await controller.process_available_jobs("worker", 2, 60) == 2
+        job_repo.mark_completed.assert_awaited_once_with(other)
+        assert job_repo.commit.await_count == 2
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "job_type,attempts,should_alert",
@@ -38,11 +133,12 @@ class TestJobProcessorController:
             (JobType.webhook_delivery, 4, False),
         ],
     )
-    async def test_alerts_only_after_exhausted_renewal_is_committed(self, job_type, attempts, should_alert) -> None:
+    async def test_alerts_only_after_exhausted_renewal_is_committed(
+        self, job_type: JobType, attempts: int, should_alert: bool
+    ) -> None:
         controller, job_repo, _, _, _, _ = _make_controller()
         alerts = AsyncMock()
         controller._renewal_alerts = alerts
-        controller._dispatch = AsyncMock(side_effect=RuntimeError("provider unavailable"))
         job = Job(
             id=50,
             type=job_type,
@@ -54,16 +150,18 @@ class TestJobProcessorController:
         job_repo.requeue_stale_processing.return_value = 0
         job_repo.claim_batch.return_value = [job]
 
-        async def mark_failed(job, error, retry_delay_seconds):
+        async def mark_failed(job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool) -> None:
+            assert count_attempt
             job.attempts += 1
             job.status = JobStatus.failed if job.attempts == job.max_attempts else JobStatus.pending
 
-        async def alert_after_commit(job):
+        async def alert_after_commit(job: Job) -> None:
             job_repo.commit.assert_awaited_once()
 
         job_repo.mark_retry_or_failed.side_effect = mark_failed
         alerts.record_failure.side_effect = alert_after_commit
-        assert await controller.process_available_jobs("worker", 5, 60) == 1
+        with patch.object(controller, "_dispatch", AsyncMock(side_effect=RuntimeError("provider unavailable"))):
+            assert await controller.process_available_jobs("worker", 5, 60) == 1
         if should_alert:
             alerts.record_failure.assert_awaited_once_with(job)
         else:
@@ -227,6 +325,7 @@ class TestJobProcessorController:
         assert processed == 1
         job_repo.mark_completed.assert_not_awaited()
         job_repo.mark_retry_or_failed.assert_awaited_once()
+        assert job_repo.mark_retry_or_failed.await_args.kwargs["count_attempt"] is True
 
     @pytest.mark.asyncio
     async def test_processes_subscription_renewal_with_app_preloaded(self) -> None:

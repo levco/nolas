@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -21,7 +21,7 @@ def test_create_subscription_includes_updates_and_immutable_ids() -> None:
     asyncio.run(client.create_subscription(account, "https://example.com/notifications", "secret"))
 
     request = http.request.await_args
-    assert request.kwargs["json_body"]["changeType"] == "created,updated"
+    assert request.kwargs["json_body"]["changeType"] == "created,updated,deleted"
     assert request.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId"'}
 
 
@@ -151,6 +151,77 @@ def test_list_threads_pushes_unread_filter_to_graph() -> None:
     asyncio.run(client.list_threads(account, ListThreadsParams(limit=20, unread=True)))
 
     assert "isRead eq false" in http.request.await_args.kwargs["params"]["$filter"]
+
+
+def test_index_refresh_fetches_every_conversation_page_with_compact_fields() -> None:
+    newest = _raw_graph_message("newest", "conversation", is_read=True)
+    newest["parentFolderId"] = "sent-id"
+    older = {**_raw_graph_message("older", "conversation", is_read=False), "parentFolderId": "inbox-id"}
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[
+                {"value": [newest], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=100"},
+                {"value": [older, {"id": "draft", "isDraft": True}]},
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    messages = asyncio.run(client.get_thread_messages(account, "conversation"))
+    assert [message.id for message in messages] == ["newest", "older"]
+    assert {folder for message in messages for folder in message.folders} == {"inbox-id", "sent-id"}
+    first, second = http.request.await_args_list
+    assert "body" not in first.kwargs["params"]["$select"].split(",")
+    assert "$expand" not in first.kwargs["params"]
+    assert second.args[2] == "https://graph.microsoft.com/v1.0/me/messages?$skip=100"
+    assert second.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId"'}
+
+
+def test_index_delta_requests_only_metadata_and_reuses_provider_cursor() -> None:
+    http = Mock(request=AsyncMock(return_value={"value": [], "@odata.deltaLink": "next-delta"}))
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    asyncio.run(client.list_thread_changes(account, "folder/id"))
+    initial = http.request.await_args
+    assert initial.args[2].endswith("/me/mailFolders/folder%2Fid/messages/delta")
+    assert initial.kwargs["params"] == {"$select": "id,conversationId,receivedDateTime,sentDateTime", "$top": 50}
+    assert initial.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId", odata.maxpagesize=50'}
+    asyncio.run(client.list_thread_changes(account, "folder/id", "https://graph.microsoft.com/v1.0/opaque-delta"))
+    assert http.request.await_args.args[2] == "https://graph.microsoft.com/v1.0/opaque-delta"
+    assert http.request.await_args.kwargs["params"] is None
+
+
+@pytest.mark.parametrize("cursor", [None, "https://graph.microsoft.com/v1.0/opaque-delta"])
+def test_index_delta_filters_dates_locally_without_the_5000_message_cap(cursor: str | None) -> None:
+    entries = [
+        {"id": "old", "receivedDateTime": "2024-10-28T23:59:59Z"},
+        {"id": "boundary", "receivedDateTime": "2024-10-29T00:00:00Z"},
+        {"id": "newer", "receivedDateTime": "2026-10-29T00:00:00Z"},
+        {"id": "sent", "sentDateTime": "2024-10-29T01:00:00+01:00"},
+        {"id": "old-sent", "sentDateTime": "2024-10-28T00:00:00Z"},
+        {"id": "deleted", "@removed": {"reason": "deleted"}, "receivedDateTime": "2020-01-01T00:00:00Z"},
+        {"id": "undated-update"},
+    ]
+    http = Mock(request=AsyncMock(return_value={"value": entries, "@odata.nextLink": "next-page"}))
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    response = asyncio.run(client.list_thread_changes(account, "inbox-id", cursor, received_after=1730160000))
+    assert [entry["id"] for entry in response["value"]] == ["boundary", "newer", "sent", "deleted", "undated-update"]
+    assert response["@odata.nextLink"] == "next-page"
+    request = http.request.await_args
+    if cursor:
+        assert request.args[2] == cursor and request.kwargs["params"] is None
+    else:
+        assert "$filter" not in request.kwargs["params"]
+
+
+def test_index_refresh_rejects_repeated_conversation_page_tokens() -> None:
+    http = Mock(
+        request=AsyncMock(return_value={"value": [], "@odata.nextLink": "https://graph.microsoft.com/repeated"})
+    )
+    with pytest.raises(ProviderError, match="repeated thread page"):
+        asyncio.run(GraphClient(http).get_thread_messages(Mock(uuid=uuid.uuid4()), "conversation"))
+    assert http.request.await_count == 2
 
 
 def _raw_graph_message(message_id: str, conversation_id: str, is_read: bool) -> dict[str, object]:

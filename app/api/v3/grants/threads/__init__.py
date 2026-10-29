@@ -17,6 +17,7 @@ from app.container import ApplicationContainer
 from app.controllers.providers.base import ListThreadsParams
 from app.controllers.providers.exceptions import ProviderError
 from app.controllers.providers.registry import ProviderRegistry
+from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.models.app import App
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,9 @@ async def list_threads(
     ),
     app: App = Depends(get_current_app),
     registry: ProviderRegistry = Depends(Provide[ApplicationContainer.controllers.provider_registry]),
+    mailbox_thread_controller: MailboxThreadController = Depends(
+        Provide[ApplicationContainer.controllers.mailbox_thread_controller]
+    ),
 ) -> ThreadListResponse | JSONResponse:
     logger.info(f"Listing threads for grant {grant_id}")
     account, error_response = await validate_grant_access(app.id, grant_id)
@@ -154,7 +158,12 @@ async def list_threads(
     )
 
     try:
-        result = await registry.get_client(account).list_threads(account, params)
+        if MailboxThreadController.is_enabled(account.provider):
+            result = await mailbox_thread_controller.list_threads(account, params)
+        else:
+            result = await registry.get_client(account).list_threads(
+                account, MailboxThreadController.provider_params(params)
+            )
         response = ThreadListResponse(request_id=str(uuid.uuid4()), data=result.threads, next_cursor=result.next_cursor)
         if fields is not None:
             return JSONResponse(

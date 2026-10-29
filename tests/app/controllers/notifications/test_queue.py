@@ -58,7 +58,9 @@ class TestNotificationQueue:
             ),
         ]
         job_repo = AsyncMock()
-        controller = IncomingNotificationController(account_repo, AsyncMock(), job_repo, AsyncMock(), graph)
+        controller = IncomingNotificationController(
+            account_repo, AsyncMock(), job_repo, AsyncMock(), graph, AsyncMock()
+        )
         queue = NotificationQueue(controller, workers=1, session_context=_noop_session)
         notification = {
             "subscriptionId": "sub-1",
