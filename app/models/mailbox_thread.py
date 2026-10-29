@@ -21,7 +21,9 @@ class MailboxThread(Base):
 
     __tablename__ = "mailbox_threads"
 
-    account_id: Mapped[int] = mapped_column(sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        sa.BigInteger, sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
     thread_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     last_message_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     last_message_date: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
@@ -49,7 +51,7 @@ class MailboxThreadIndexState(Base):
     __tablename__ = "mailbox_thread_index_states"
 
     account_id: Mapped[int] = mapped_column(
-        sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
+        sa.BigInteger, sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     phase: Mapped[MailboxThreadIndexPhase] = mapped_column(
         EnumStringType(MailboxThreadIndexPhase), nullable=False, default=MailboxThreadIndexPhase.backfill
