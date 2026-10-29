@@ -80,6 +80,12 @@ class MicrosoftProviderSettings(BaseSettings):
 class RedisSettings(BaseSettings):
     url: str = Field(alias="REDIS_URL", default="redis://redis:6379/0")
     socket_timeout_seconds: int = Field(alias="REDIS_SOCKET_TIMEOUT_SECONDS", default=3, ge=1)
+    sentinel_host: str = Field(alias="SENTINEL_HOST", default="sentinel", min_length=1)
+    sentinel_port: int = Field(alias="SENTINEL_PORT", default=23679, ge=1, le=65535)
+    sentinel_master_name: str = Field(alias="SENTINEL_MASTER_NAME", default="mymaster", min_length=1)
+    sentinel_socket_timeout: int = Field(alias="SENTINEL_SOCKET_TIMEOUT", default=3, ge=1)
+    sentinel_password: str | None = Field(alias="SENTINEL_PASSWORD", default=None)
+    redis_password: str | None = Field(alias="REDIS_PASSWORD", default=None)
 
 
 class NotificationQueueSettings(BaseSettings):
@@ -122,6 +128,7 @@ class Settings(BaseSettings):
 
     use_thread_index: bool = Field(alias="USE_THREAD_INDEX", default=True)
     environment: EnvironmentName = Field(alias="ENVIRONMENT")
+    use_sentinel: bool = Field(alias="USE_SENTINEL", default=True, validate_default=True)
     password_encryption_key: str = Field(alias="PASSWORD_ENCRYPTION_KEY")
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -139,6 +146,11 @@ class Settings(BaseSettings):
     retention: RetentionSettings = Field(default_factory=RetentionSettings)
     notification_queue: NotificationQueueSettings = Field(default_factory=NotificationQueueSettings)
     job_processor: JobProcessorSettings = Field(default_factory=JobProcessorSettings)
+
+    @field_validator("use_sentinel")
+    @classmethod
+    def disable_sentinel_in_tests(cls, value: bool, info: ValidationInfo) -> bool:
+        return value and info.data["environment"] not in (EnvironmentName.TESTING, EnvironmentName.UNIT_TESTING)
 
     @field_validator("environment", mode="before")
     def set_logging_level(cls, level: str, info: ValidationInfo) -> EnvironmentName:
