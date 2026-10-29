@@ -39,6 +39,7 @@ def controller(account: Account) -> ControllerFixture:
     gmail = AsyncMock()
     registry = Mock(get_gmail=Mock(return_value=gmail))
     thread_repo = AsyncMock()
+    thread_repo.has_two_month_history.return_value = False
     thread_repo.get_state.return_value = MailboxThreadIndexState(
         account_id=account.id, phase=MailboxThreadIndexPhase.ready
     )
@@ -112,6 +113,7 @@ async def test_google_pages_index_without_any_provider_calls(
     controller.registry.get_graph.assert_not_called()
     controller.registry.get_client.assert_not_called()
     controller.job_repo.enqueue.assert_not_awaited()
+    controller.thread_repo.has_two_month_history.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -170,6 +172,48 @@ async def test_cursor_cannot_be_reused_for_another_mailbox_or_filter(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
+@pytest.mark.parametrize("phase", [MailboxThreadIndexPhase.backfill, MailboxThreadIndexPhase.catchup])
+@pytest.mark.parametrize("has_history", [False, True])
+async def test_in_progress_index_uses_cache_once_it_has_two_month_history(
+    controller: ControllerFixture,
+    account: Account,
+    provider: AccountProvider,
+    phase: MailboxThreadIndexPhase,
+    has_history: bool,
+) -> None:
+    account.provider = provider
+    state = controller.thread_repo.get_state.return_value
+    state.phase = phase
+    if provider == AccountProvider.microsoft:
+        state.provider_state = MicrosoftThreadIndexProgress(inbox_id="inbox-id", sent_id="sent-id").model_dump()
+    controller.thread_repo.has_two_month_history.return_value = has_history
+    controller.thread_repo.page.return_value = [reference("a", 300), reference("b", 200)]
+    provider_client = AsyncMock(list_threads=AsyncMock(return_value=ListThreadsResult([], "provider-next")))
+    controller.registry.get_client.return_value = provider_client
+    params = ListThreadsParams(in_="INBOX", limit=1)
+
+    result = await controller.subject.list_threads(account, params)
+
+    controller.thread_repo.has_two_month_history.assert_awaited_once_with(account.id)
+    assert state.phase == phase
+    controller.job_repo.enqueue.assert_not_awaited()
+    if has_history:
+        assert [thread.id for thread in result.threads] == ["a"]
+        assert result.next_cursor and result.next_cursor.startswith("index:")
+        controller.thread_repo.page.return_value = [reference("b", 200)]
+        second = await controller.subject.list_threads(account, replace(params, page_token=result.next_cursor))
+        assert [thread.id for thread in second.threads] == ["b"]
+        assert second.next_cursor is None
+        assert controller.thread_repo.page.await_args.args[-1] == (300, "a")
+        provider_client.list_threads.assert_not_awaited()
+    else:
+        assert result.next_cursor == "provider-next"
+        provider_client.list_threads.assert_awaited_once()
+        controller.thread_repo.page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
 @pytest.mark.parametrize("phase", [None, MailboxThreadIndexPhase.backfill, MailboxThreadIndexPhase.catchup])
 async def test_preparing_index_returns_provider_page_and_only_enqueues_once(
     controller: ControllerFixture, account: Account, provider: AccountProvider, phase: MailboxThreadIndexPhase | None
@@ -179,6 +223,7 @@ async def test_preparing_index_returns_provider_page_and_only_enqueues_once(
         None if phase is None else MailboxThreadIndexState(account_id=account.id, phase=phase)
     )
     controller.thread_repo.create_state.return_value = True
+    controller.thread_repo.has_two_month_history.return_value = True
     expected = ListThreadsResult([build_threads_from_messages([message("a", 100)])[0]], "provider-next")
     provider_client = AsyncMock(list_threads=AsyncMock(return_value=expected))
     controller.registry.get_client.return_value = provider_client
@@ -191,6 +236,7 @@ async def test_preparing_index_returns_provider_page_and_only_enqueues_once(
         controller.job_repo.enqueue.assert_not_awaited()
     controller.registry.get_gmail.assert_not_called()
     controller.thread_repo.page.assert_not_awaited()
+    controller.thread_repo.has_two_month_history.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -207,6 +253,8 @@ async def test_provider_pagination_survives_index_becoming_ready(
     params = ListThreadsParams(in_="INBOX", limit=10)
     first = await controller.subject.list_threads(account, params)
     state.phase = MailboxThreadIndexPhase.ready
+    if provider == AccountProvider.microsoft:
+        state.provider_state = MicrosoftThreadIndexProgress(inbox_id="INBOX", sent_id="SENT").model_dump()
     second_params = replace(params, page_token=first.next_cursor)
     second = await controller.subject.list_threads(account, second_params)
     assert first is expected[0] and second is expected[1]
@@ -495,6 +543,33 @@ async def test_microsoft_pages_are_globally_ordered_without_any_provider_calls(
     controller.registry.get_graph.assert_not_called()
     controller.registry.get_gmail.assert_not_called()
     controller.registry.get_client.assert_not_called()
+    controller.job_repo.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folder", ["INBOX", "SENT", "custom-folder"])
+@pytest.mark.parametrize("page_token", [None, "provider-next", "index:previous"])
+async def test_microsoft_uninitialized_folders_keep_provider_pagination_despite_old_cached_threads(
+    microsoft_controller: ControllerFixture, account: Account, folder: str, page_token: str | None
+) -> None:
+    controller = microsoft_controller
+    state = controller.thread_repo.get_state.return_value
+    state.phase = MailboxThreadIndexPhase.backfill
+    state.provider_state = None
+    controller.thread_repo.has_two_month_history.return_value = True
+    controller.thread_repo.page.return_value = [reference("old-thread", 100)]
+    expected = ListThreadsResult([], "provider-next")
+    provider = AsyncMock(list_threads=AsyncMock(return_value=expected))
+    controller.registry.get_client.return_value = provider
+    params = ListThreadsParams(in_=folder, page_token=page_token)
+
+    assert await controller.subject.list_threads(account, params) is expected
+
+    provider.list_threads.assert_awaited_once_with(
+        account, replace(params, page_token=None) if page_token == "index:previous" else params
+    )
+    controller.thread_repo.page.assert_not_awaited()
+    controller.thread_repo.has_two_month_history.assert_not_awaited()
     controller.job_repo.enqueue.assert_not_awaited()
 
 
