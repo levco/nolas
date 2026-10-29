@@ -17,7 +17,7 @@ def upgrade() -> None:
         sa.Column(
             "account_id", sa.BigInteger(), sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
         ),
-        sa.Column("phase", sa.String(16), nullable=False),
+        sa.Column("phase", sa.String(50), nullable=False),
         sa.Column("page_token", sa.Text()),
         sa.Column("history_id", sa.String(255)),
         sa.Column("provider_state", postgresql.JSONB()),

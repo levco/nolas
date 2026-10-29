@@ -187,4 +187,4 @@ def test_phase_enum_reads_existing_strings_and_writes_to_the_original_schema(
     assert session.execute(sa.text("SELECT phase FROM mailbox_thread_index_states")).scalar_one() == updated.value
     columns = sa.inspect(session.connection()).get_columns("mailbox_thread_index_states")
     phase_type = next(column["type"] for column in columns if column["name"] == "phase")
-    assert isinstance(phase_type, sa.String) and phase_type.length == 16
+    assert isinstance(phase_type, sa.String) and phase_type.length == 50
