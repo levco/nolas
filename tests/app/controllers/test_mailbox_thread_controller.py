@@ -14,6 +14,7 @@ from app.controllers.notifications.incoming_controller import IncomingNotificati
 from app.controllers.providers.base import FolderData, ListThreadsParams
 from app.controllers.providers.base import ListThreadsResult
 from app.controllers.providers.exceptions import ProviderError, ProviderNotFoundError, ProviderRateLimitError
+from app.controllers.providers.microsoft.graph_client import GraphClient
 from app.controllers.providers.threads import build_threads_from_messages
 from app.models.account import Account, AccountProvider, AccountStatus
 from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexState
@@ -503,6 +504,63 @@ async def test_cache_uses_latest_sent_reply_and_provider_read_state_without_stor
     assert cached["earliest_message_date"] == 100
     assert sent.body == "Body"
     assert sent.headers is not None
+
+
+@pytest.mark.asyncio
+async def test_microsoft_backfills_beyond_5000_messages_without_hydrating_old_only_pages(
+    microsoft_controller: ControllerFixture, account: Account
+) -> None:
+    controller = microsoft_controller
+    state = controller.thread_repo.get_state.return_value
+    state.phase = "backfill"
+    now = int(controller.job_repo.db_now.return_value.timestamp())
+    entries = [
+        {"id": f"m-{index}", "conversationId": f"t-{index}", "receivedDateTime": "2026-10-29T00:00:00Z"}
+        for index in range(5000)
+    ]
+    entries.extend(
+        {"id": f"old-{index}", "conversationId": f"old-t-{index}", "receivedDateTime": "2020-01-01T00:00:00Z"}
+        for index in range(50)
+    )
+    entries.append({"id": "m-5000", "conversationId": "t-5000", "receivedDateTime": "2026-10-29T00:00:00Z"})
+    pages = [
+        {
+            "value": entries[start : start + 50],
+            (
+                "@odata.nextLink" if start + 50 < len(entries) else "@odata.deltaLink"
+            ): f"https://graph.microsoft.com/v1.0/page-{start + 50}",
+        }
+        for start in range(0, len(entries), 50)
+    ]
+    http = AsyncMock()
+    http.request.side_effect = pages
+    graph = GraphClient(http)
+    controller.registry.get_graph.return_value = graph
+    stored: set[str] = set()
+
+    async def store(account_id: int, thread_id: str, messages: list[Message], *, provider: AccountProvider) -> None:
+        stored.add(thread_id)
+
+    controller.thread_repo.upsert.side_effect = store
+    job = MailboxThreadIndexJobPayload(account_id=account.id)
+    with patch.object(
+        graph, "get_thread_messages", AsyncMock(side_effect=lambda _, thread_id: [message(thread_id, now)])
+    ) as fetch:
+        for page_number, _ in enumerate(pages):
+            await controller.subject.process_index_job(job)
+            assert http.request.await_count == page_number + 1
+            if page_number == 100:
+                assert fetch.await_count == 5000
+                assert controller.job_repo.enqueue.await_args.kwargs["available_at"].timestamp() == now
+        assert fetch.await_count == 5001
+
+    assert stored == {f"t-{index}" for index in range(5001)}
+    assert "$filter" not in http.request.await_args_list[0].kwargs["params"]
+    assert all(call.kwargs["params"] is None for call in http.request.await_args_list[1:])
+    assert controller.job_repo.enqueue.await_count == len(pages)
+    progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
+    assert progress.folder_index == 1 and "inbox-id" in progress.delta_links
+    assert state.phase == "backfill" and state.page_token is None
 
 
 @pytest.mark.asyncio

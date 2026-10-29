@@ -34,6 +34,7 @@ from app.controllers.providers.exceptions import (
 )
 from app.controllers.providers.http import AuthorizedHttpClient
 from app.controllers.providers.microsoft.mapper import (
+    _to_epoch,
     graph_folder_name,
     map_graph_attachment,
     map_graph_message,
@@ -384,11 +385,9 @@ class GraphClient(ProviderClient):
     async def list_thread_changes(
         self, account: Account, folder_id: str, cursor: str | None = None, *, received_after: int | None = None
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {"$select": "id,conversationId", "$top": 50}
-        if received_after is not None:
-            since = datetime.fromtimestamp(received_after, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["$filter"] = f"receivedDateTime ge {since}"
-        return dict(
+        # Date-filtered delta queries stop at 5,000 messages; filter metadata locally before hydration.
+        params: dict[str, Any] = {"$select": "id,conversationId,receivedDateTime,sentDateTime", "$top": 50}
+        response = dict(
             await self._http.request(
                 account,
                 "GET",
@@ -397,6 +396,15 @@ class GraphClient(ProviderClient):
                 headers={"Prefer": 'IdType="ImmutableId", odata.maxpagesize=50'},
             )
         )
+        if received_after is not None:
+            response["value"] = [
+                entry
+                for entry in response.get("value", [])
+                if "@removed" in entry
+                or not (entry.get("receivedDateTime") or entry.get("sentDateTime"))
+                or _to_epoch(entry.get("receivedDateTime") or entry.get("sentDateTime")) >= received_after
+            ]
+        return response
 
     def _build_list_result(
         self, account: Account, response: dict[str, Any], params: ListMessagesParams

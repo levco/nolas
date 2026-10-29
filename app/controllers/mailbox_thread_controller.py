@@ -281,7 +281,7 @@ class MailboxThreadController:
         thread_ids.update(entry["conversationId"] for entry in entries if entry.get("conversationId"))
         await self._refresh_threads(account, sorted(thread_ids), received_after=progress.received_after)
         state.page_token = next_link
-        delay = 5
+        delay = 5 if entries else 0
         if not next_link:
             assert isinstance(delta_link, str)
             progress.delta_links[folder_id] = delta_link

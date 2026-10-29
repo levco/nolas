@@ -177,30 +177,42 @@ def test_index_refresh_fetches_every_conversation_page_with_compact_fields() -> 
     assert second.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId"'}
 
 
-def test_index_delta_requests_only_ids_and_reuses_provider_cursor() -> None:
+def test_index_delta_requests_only_metadata_and_reuses_provider_cursor() -> None:
     http = Mock(request=AsyncMock(return_value={"value": [], "@odata.deltaLink": "next-delta"}))
     client = GraphClient(http)
     account = Mock(uuid=uuid.uuid4())
     asyncio.run(client.list_thread_changes(account, "folder/id"))
     initial = http.request.await_args
     assert initial.args[2].endswith("/me/mailFolders/folder%2Fid/messages/delta")
-    assert initial.kwargs["params"] == {"$select": "id,conversationId", "$top": 50}
+    assert initial.kwargs["params"] == {"$select": "id,conversationId,receivedDateTime,sentDateTime", "$top": 50}
     assert initial.kwargs["headers"] == {"Prefer": 'IdType="ImmutableId", odata.maxpagesize=50'}
     asyncio.run(client.list_thread_changes(account, "folder/id", "https://graph.microsoft.com/v1.0/opaque-delta"))
     assert http.request.await_args.args[2] == "https://graph.microsoft.com/v1.0/opaque-delta"
     assert http.request.await_args.kwargs["params"] is None
 
 
-def test_index_delta_limits_initial_enumeration_to_the_backfill_window() -> None:
-    http = Mock(request=AsyncMock(return_value={"value": [], "@odata.deltaLink": "delta"}))
+@pytest.mark.parametrize("cursor", [None, "https://graph.microsoft.com/v1.0/opaque-delta"])
+def test_index_delta_filters_dates_locally_without_the_5000_message_cap(cursor: str | None) -> None:
+    entries = [
+        {"id": "old", "receivedDateTime": "2024-10-28T23:59:59Z"},
+        {"id": "boundary", "receivedDateTime": "2024-10-29T00:00:00Z"},
+        {"id": "newer", "receivedDateTime": "2026-10-29T00:00:00Z"},
+        {"id": "sent", "sentDateTime": "2024-10-29T01:00:00+01:00"},
+        {"id": "old-sent", "sentDateTime": "2024-10-28T00:00:00Z"},
+        {"id": "deleted", "@removed": {"reason": "deleted"}, "receivedDateTime": "2020-01-01T00:00:00Z"},
+        {"id": "undated-update"},
+    ]
+    http = Mock(request=AsyncMock(return_value={"value": entries, "@odata.nextLink": "next-page"}))
     client = GraphClient(http)
     account = Mock(uuid=uuid.uuid4())
-    asyncio.run(client.list_thread_changes(account, "inbox-id", received_after=1730160000))
-    assert http.request.await_args.kwargs["params"]["$filter"] == "receivedDateTime ge 2024-10-29T00:00:00Z"
-    asyncio.run(
-        client.list_thread_changes(account, "inbox-id", "https://graph.microsoft.com/delta", received_after=1730160000)
-    )
-    assert http.request.await_args.kwargs["params"] is None
+    response = asyncio.run(client.list_thread_changes(account, "inbox-id", cursor, received_after=1730160000))
+    assert [entry["id"] for entry in response["value"]] == ["boundary", "newer", "sent", "deleted", "undated-update"]
+    assert response["@odata.nextLink"] == "next-page"
+    request = http.request.await_args
+    if cursor:
+        assert request.args[2] == cursor and request.kwargs["params"] is None
+    else:
+        assert "$filter" not in request.kwargs["params"]
 
 
 def test_index_refresh_rejects_repeated_conversation_page_tokens() -> None:
