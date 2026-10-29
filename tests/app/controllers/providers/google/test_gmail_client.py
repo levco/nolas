@@ -193,11 +193,24 @@ class TestGmailClientBatchHydration:
         assert caught.value is error
         assert http.request.await_count == 1
 
+    def test_batch_quota_error_preserves_the_longest_nested_retry_after(self) -> None:
+        parts = [
+            _batch_part(message_id, status, '{"error":{"message":"rate limited"}}').replace(
+                "Content-Type: application/json;", f"Retry-After: {delay}\r\nContent-Type: application/json;"
+            )
+            for message_id, status, delay in [("m1", 403, 900), ("m2", 429, 1200)]
+        ]
+        http = Mock(request=AsyncMock(return_value=_batch_response(parts)))
+        with pytest.raises(ProviderRateLimitError) as caught:
+            asyncio.run(GmailClient(http)._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
+        assert caught.value.retry_after_seconds == 1200
+        assert http.request.await_count == 1
+
     def test_normalizes_response_content_id_for_rate_limited_subrequests(self) -> None:
         client = GmailClient(Mock())
         body = _batch_response([_batch_part("response-m1+abc", 429, '{"error":{"message":"rate limited"}}')])
-        messages, limited_ids = client._parse_batch_response(body, _account(), False, {"m1"})
-        assert messages == {} and limited_ids == ["m1"]
+        messages, limited_ids, retry_after = client._parse_batch_response(body, _account(), False, {"m1"})
+        assert messages == {} and limited_ids == ["m1"] and retry_after is None
 
 
 class TestGmailClientThreads:

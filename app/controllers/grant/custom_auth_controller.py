@@ -51,6 +51,7 @@ class CustomAuthController:
         if account is not None:
             if MailboxThreadController.is_enabled(provider):
                 await self._account_repo.acquire_notification_lock(account.id)
+                await self._account_repo.refresh_from_db(account)
             # Re-auth of an existing grant: keep the UUID (grant id) stable.
             context = {
                 key: value
@@ -103,6 +104,7 @@ class CustomAuthController:
             raise ProviderAuthError(f"Refresh token belongs to a different mailbox than grant {account.uuid}.")
         if MailboxThreadController.is_enabled(account.provider):
             await self._account_repo.acquire_notification_lock(account.id)
+            await self._account_repo.refresh_from_db(account)
         context = {
             key: value
             for key, value in (account.provider_context or {}).items()

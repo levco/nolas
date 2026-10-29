@@ -1,6 +1,10 @@
 def is_rate_limit_response(status_code: int, body: str) -> bool:
     return status_code == 429 or (
-        status_code == 403 and any(marker in body.lower() for marker in ("rate", "quota", "resource_exhausted"))
+        status_code == 403
+        and any(
+            marker in body.lower()
+            for marker in ("ratelimitexceeded", "rate_limit_exceeded", "rate limit", "quota", "resource_exhausted")
+        )
     )
 
 

@@ -104,9 +104,10 @@ async def test_quota_responses_are_retryable_without_expiring_the_grant(status: 
 
 
 @pytest.mark.asyncio
-async def test_forbidden_permissions_are_not_treated_as_a_quota_error() -> None:
+@pytest.mark.parametrize("body", ['{"reason":"insufficientPermissions"}', "Permission denied: generate a separate app"])
+async def test_forbidden_permissions_are_not_treated_as_a_quota_error(body: str) -> None:
     client = AuthorizedHttpClient(AsyncMock(), timeout=30)
-    response = Mock(status=403, headers={}, text=AsyncMock(return_value='{"reason":"insufficientPermissions"}'))
+    response = Mock(status=403, headers={}, text=AsyncMock(return_value=body))
     with pytest.raises(ProviderError) as error:
         await client._handle_response(Mock(), response, True)
     assert not isinstance(error.value, ProviderRateLimitError)

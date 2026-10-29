@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from typing import cast
@@ -7,7 +8,8 @@ import pytest
 
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.models.account import AccountProvider, AccountStatus
-from app.controllers.providers.exceptions import ProviderRateLimitError
+from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
+from app.models.job import JobType
 from settings import settings
 
 
@@ -68,6 +70,61 @@ def test_message_quota_error_propagates_without_acknowledging_delivery(provider:
             )
         )
     job_repo.enqueue.assert_not_awaited()
+
+
+@pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
+@pytest.mark.parametrize(
+    "error,delay",
+    [
+        (ProviderError("Provider unavailable", status_code=503), 5),
+        (TimeoutError(), 5),
+        (ProviderRateLimitError("Quota exceeded", retry_after_seconds=900), 900),
+    ],
+)
+def test_cache_failure_defers_repair_without_blocking_webhooks(
+    provider: AccountProvider, error: Exception, delay: int
+) -> None:
+    controller, account_repo, _, job_repo, gmail, graph = _controller()
+    account = SimpleNamespace(
+        id=1,
+        email="owner@example.com",
+        status=AccountStatus.active,
+        provider_context={"history_id": "100", "client_state": "secret"},
+    )
+    now = datetime(2026, 10, 29, tzinfo=UTC)
+    job_repo.db_now.return_value = now
+    index = cast(AsyncMock, controller._mailbox_thread_controller)
+    index.refresh_threads.side_effect = error
+    message = SimpleNamespace(
+        id="message", thread_id="thread", folders=["INBOX"], model_dump=lambda **_: {"id": "message"}
+    )
+    if provider == AccountProvider.google:
+        account_repo.get_all_by_email_and_provider.return_value = [account]
+        gmail.get_message.return_value = message
+        gmail.list_history.return_value = {
+            "historyId": "101",
+            "history": [{"id": "101", "labelsAdded": [{"message": {"id": "message", "threadId": "thread"}}]}],
+        }
+        asyncio.run(controller.process_google_notification(account.email, "101"))
+        assert account_repo.update.await_args.args[1]["provider_context"]["history_id"] == "101"
+    else:
+        account_repo.get_by_subscription_id.return_value = account
+        graph.get_message.return_value = message
+        asyncio.run(
+            controller.process_microsoft_notification(
+                {
+                    "subscriptionId": "subscription",
+                    "clientState": "secret",
+                    "changeType": "updated",
+                    "resourceData": {"id": "message"},
+                }
+            )
+        )
+    repair, webhook = job_repo.enqueue.await_args_list
+    assert repair.args == (JobType.mailbox_thread_index, {"account_id": 1, "thread_ids": ["thread"]})
+    assert repair.kwargs["available_at"] == now + timedelta(seconds=delay)
+    assert webhook.args[0] == JobType.webhook_delivery
+    assert webhook.args[1]["event_type"] == "message.updated"
 
 
 def test_google_history_emits_created_and_updated_without_duplicates() -> None:

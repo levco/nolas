@@ -79,7 +79,7 @@ class MailboxThreadController:
             or not params.in_
             or (account.provider == AccountProvider.google and params.in_ not in {"INBOX", "SENT"})
         ):
-            return await self._registry.get_client(account).list_threads(account, params)
+            return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
         state = await self._thread_repo.get_state(account.id)
         if account.provider == AccountProvider.microsoft and state is not None and state.provider_state:
             progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
@@ -87,7 +87,7 @@ class MailboxThreadController:
                 params.in_.lower(), params.in_
             )
             if folder not in {progress.inbox_id, progress.sent_id}:
-                return await self._registry.get_client(account).list_threads(account, params)
+                return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
             params = replace(params, in_=folder)
         if state is None:
             if await self._thread_repo.create_state(account.id):
@@ -98,10 +98,7 @@ class MailboxThreadController:
             or (params.page_token and not params.page_token.startswith(INDEX_CURSOR_PREFIX))
         ):
             # shortcut: provider pagination keeps its old ordering limits until a refresh uses the ready index.
-            if params.page_token and params.page_token.startswith(INDEX_CURSOR_PREFIX):
-                # A rebuild invalidates indexed pages; restart through the provider instead of forwarding its cursor.
-                params = replace(params, page_token=None)
-            return await self._registry.get_client(account).list_threads(account, params)
+            return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
         filters = asdict(params)
         filters.pop("limit")
         filters.pop("page_token")
@@ -129,6 +126,12 @@ class MailboxThreadController:
             next_cursor = INDEX_CURSOR_PREFIX + base64.urlsafe_b64encode(cursor.model_dump_json().encode()).decode()
         return ListThreadsResult(threads=result, next_cursor=next_cursor)
 
+    @staticmethod
+    def provider_params(params: ListThreadsParams) -> ListThreadsParams:
+        if params.page_token and params.page_token.startswith(INDEX_CURSOR_PREFIX):
+            return replace(params, page_token=None)
+        return params
+
     async def _enqueue(self, account_id: int, thread_ids: list[str] | None = None, *, delay_seconds: int = 5) -> None:
         payload = MailboxThreadIndexJobPayload(account_id=account_id, thread_ids=thread_ids or [])
         if thread_ids:
@@ -149,6 +152,7 @@ class MailboxThreadController:
         await self._enqueue(account_id)
 
     async def refresh_threads(self, account: Account, thread_ids: list[str]) -> None:
+        await self._account_repo.acquire_notification_lock(account.id)
         state = await self._thread_repo.get_state(account.id)
         if state is not None:
             await self._refresh_threads(account, thread_ids, received_after=await self._index_since(state))

@@ -1,7 +1,9 @@
 import logging
+from datetime import timedelta
 from typing import Any
 
 from app.controllers.notifications.bounce import detect_bounce
+from app.controllers.jobs.payloads import MailboxThreadIndexJobPayload
 from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.controllers.providers.exceptions import (
     ProviderAuthError,
@@ -130,7 +132,7 @@ class IncomingNotificationController:
             return
 
         if settings.use_thread_index and changed_thread_ids:
-            await self._mailbox_thread_controller.refresh_threads(account, sorted(changed_thread_ids))
+            await self._refresh_index_threads(account, sorted(changed_thread_ids))
 
         # A newly-added message can also have label records in the same history
         # window. Emit one event with its latest state, with message.created taking
@@ -214,6 +216,19 @@ class IncomingNotificationController:
 
     # --- Shared ---
 
+    async def _refresh_index_threads(self, account: Account, thread_ids: list[str]) -> None:
+        try:
+            await self._mailbox_thread_controller.refresh_threads(account, thread_ids)
+        except Exception as exc:
+            delay = max(300, exc.retry_after_seconds or 0) if isinstance(exc, ProviderRateLimitError) else 5
+            payload = MailboxThreadIndexJobPayload(account_id=account.id, thread_ids=thread_ids)
+            await self._job_repo.enqueue(
+                JobType.mailbox_thread_index,
+                payload.model_dump(),
+                available_at=await self._job_repo.db_now() + timedelta(seconds=delay),
+            )
+            logger.warning("Deferred thread cache refresh for account %s: %s", account.id, exc)
+
     async def _emit_message_event(
         self,
         account: Account,
@@ -236,7 +251,7 @@ class IncomingNotificationController:
                 await self._mailbox_thread_controller.refresh_microsoft_message(account, message_id)
             return
         if provider == AccountProvider.microsoft and settings.use_thread_index:
-            await self._mailbox_thread_controller.refresh_threads(account, [message.thread_id])
+            await self._refresh_index_threads(account, [message.thread_id])
         if provider == AccountProvider.microsoft and not message.folders:
             return
 

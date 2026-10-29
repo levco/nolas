@@ -161,7 +161,9 @@ async def list_threads(
         if MailboxThreadController.is_enabled(account.provider):
             result = await mailbox_thread_controller.list_threads(account, params)
         else:
-            result = await registry.get_client(account).list_threads(account, params)
+            result = await registry.get_client(account).list_threads(
+                account, MailboxThreadController.provider_params(params)
+            )
         response = ThreadListResponse(request_id=str(uuid.uuid4()), data=result.threads, next_cursor=result.next_cursor)
         if fields is not None:
             return JSONResponse(

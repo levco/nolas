@@ -103,6 +103,20 @@ async def test_index_flag_routes_through_indexed_controller(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_name", [AccountProvider.google, AccountProvider.microsoft])
+async def test_disabling_index_restarts_an_index_cursor_with_the_provider(
+    monkeypatch: pytest.MonkeyPatch, thread: Thread, provider_name: AccountProvider
+) -> None:
+    monkeypatch.setattr(settings, "use_thread_index", False)
+    account = Account(id=1, uuid=uuid.uuid4(), provider=provider_name)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    provider = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([thread], "provider-cursor")))
+    status, body = await request_threads(provider, str(account.uuid), {"in": "INBOX", "page_token": "index:cursor"})
+    assert status == 200 and body["next_cursor"] == "provider-cursor"
+    assert provider.list_threads.await_args.args[1].page_token is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider_name", list(AccountProvider))
 @pytest.mark.parametrize("select", [None, " id, subject,id ", "id,latest_draft_or_message"])
 async def test_thread_selection_preserves_envelope_and_nested_aliases(

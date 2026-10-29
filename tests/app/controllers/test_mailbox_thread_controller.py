@@ -237,6 +237,42 @@ async def test_rebuilding_index_restarts_provider_pagination_without_forwarding_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,params",
+    [
+        (AccountProvider.google, ListThreadsParams(in_="INBOX", search_query_native="from:person@example.com")),
+        (AccountProvider.google, ListThreadsParams()),
+        (AccountProvider.google, ListThreadsParams(in_="custom-label")),
+        (AccountProvider.microsoft, ListThreadsParams(in_="custom-folder")),
+    ],
+)
+async def test_provider_fallback_never_receives_an_index_cursor(
+    controller: ControllerFixture, account: Account, provider: AccountProvider, params: ListThreadsParams
+) -> None:
+    account.provider = provider
+    if provider == AccountProvider.microsoft:
+        controller.thread_repo.get_state.return_value.provider_state = MicrosoftThreadIndexProgress(
+            inbox_id="inbox", sent_id="sent"
+        ).model_dump()
+    provider_client = AsyncMock(list_threads=AsyncMock(return_value=ListThreadsResult([])))
+    controller.registry.get_client.return_value = provider_client
+    params.page_token = "index:cursor"
+    await controller.subject.list_threads(account, params)
+    provider_client.list_threads.assert_awaited_once_with(account, replace(params, page_token=None))
+    assert params.page_token == "index:cursor"
+    controller.thread_repo.page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_refresh_locks_before_reading_index_state(controller: ControllerFixture, account: Account) -> None:
+    async def state_after_lock(account_id: int) -> None:
+        controller.account_repo.acquire_notification_lock.assert_awaited_once_with(account_id)
+
+    controller.thread_repo.get_state.side_effect = state_after_lock
+    await controller.subject.refresh_threads(account, ["thread"])
+
+
+@pytest.mark.asyncio
 async def test_invalid_index_cursor_never_reaches_provider(controller: ControllerFixture, account: Account) -> None:
     with pytest.raises(ProviderError) as error:
         await controller.subject.list_threads(account, ListThreadsParams(in_="INBOX", page_token="index:malformed!"))
@@ -399,7 +435,7 @@ async def test_live_google_updates_survive_backfill_and_arrivals_between_catchup
         "existing": now + 1,
         "new-thread": now + 2,
     }
-    assert controller.account_repo.acquire_notification_lock.await_count == 6
+    assert controller.account_repo.acquire_notification_lock.await_count == 8
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,12 @@ class TestCustomAuthController:
         controller, account_repo, token_service, _ = _make_controller()
         app = App(id=7)
         account = Account(id=9, email="user@example.com", provider=provider, provider_context={})
+
+        async def reload(current: Account) -> None:
+            account_repo.acquire_notification_lock.assert_awaited_once_with(current.id)
+            current.provider_context = {"subscription_id": "renewed-subscription", "access_token": "stale-token"}
+
+        account_repo.refresh_from_db.side_effect = reload
         account_repo.get_by_app_and_email.return_value = account
         token_service.validate_refresh_token.return_value = {"access_token": "test-access-token"}
         controller._fetch_account_email = AsyncMock(return_value=account.email)  # type: ignore[method-assign] Test boundary.
@@ -39,6 +45,8 @@ class TestCustomAuthController:
             else:
                 await controller.update_grant_refresh_token(app, account, "test-refresh-token")
         cast(AsyncMock, controller._mailbox_thread_controller).rebuild.assert_awaited_once_with(account.id)
+        account_repo.refresh_from_db.assert_awaited_once_with(account)
+        assert account_repo.update.await_args.args[1]["provider_context"] == {"subscription_id": "renewed-subscription"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reconnect_method", ["create_grant_from_refresh_token", "update_grant_refresh_token"])
