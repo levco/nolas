@@ -1,10 +1,11 @@
 """Opt-in checks against a local PostgreSQL database; every change is rolled back."""
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import importlib.util
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from alembic.migration import MigrationContext
@@ -99,6 +100,50 @@ def test_message_tombstone_lookup_is_mailbox_scoped(session: Session) -> None:
         MailboxThread.account_id == 1, MailboxThread.message_ids.overlap(["message-thread", "message-foreign"])
     )
     assert list(session.scalars(matching)) == ["thread"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [None, -1, 0, 1])
+async def test_two_month_history_boundary_and_account_isolation(session: Session, offset: int | None) -> None:
+    cutoff = session.execute(sa.text("SELECT now() - INTERVAL '2 months'")).scalar_one()
+    session.execute(sa.insert(MailboxThread), [{**row("foreign", 0, 2), "last_message_date": cutoff}])
+    if offset is not None:
+        session.execute(
+            sa.insert(MailboxThread),
+            [{**row("own", 0), "last_message_date": cutoff + timedelta(seconds=offset)}],
+        )
+    repo = MailboxThreadRepo()
+    with patch.object(repo, "_db", Mock(session=Mock(scalar=AsyncMock(side_effect=session.scalar)))):
+        assert await repo.has_two_month_history(1) is (offset is not None and offset <= 0)
+
+
+@pytest.mark.asyncio
+async def test_two_month_history_uses_existing_index_for_a_large_recent_mailbox(session: Session) -> None:
+    session.execute(
+        sa.text(
+            """
+        INSERT INTO mailbox_threads
+            (account_id, thread_id, last_message_id, last_message_date, subject,
+             folders, participants, senders, recipients, cc, bcc, unread, starred, has_attachment)
+        SELECT 1, 'thread-' || n, 'message-' || n, now() - n * INTERVAL '1 second', 'Subject',
+            ARRAY['INBOX'], ARRAY[]::varchar[], ARRAY[]::varchar[], ARRAY[]::varchar[],
+            ARRAY[]::varchar[], ARRAY[]::varchar[], false, false, false
+        FROM generate_series(1, 100000) n
+    """
+        )
+    )
+    session.execute(sa.text("ANALYZE mailbox_threads"))
+    repo = MailboxThreadRepo()
+    scalar = AsyncMock(side_effect=session.scalar)
+    with patch.object(repo, "_db", Mock(session=Mock(scalar=scalar))):
+        assert await repo.has_two_month_history(1) is False
+    compiled = scalar.await_args.args[0].compile(dialect=session.get_bind().dialect)
+    plan = (
+        session.connection()
+        .exec_driver_sql("EXPLAIN (ANALYZE, FORMAT JSON) " + str(compiled), compiled.params)
+        .scalar_one()[0]["Plan"]
+    )
+    assert "ix_mailbox_threads_page" in str(plan)
 
 
 def test_literal_subject_and_participant_filters(session: Session) -> None:

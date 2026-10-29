@@ -94,10 +94,13 @@ class MailboxThreadController:
                 await self._enqueue(account.id)
         if (
             state is None
-            or state.phase != MailboxThreadIndexPhase.ready
             or (params.page_token and not params.page_token.startswith(INDEX_CURSOR_PREFIX))
+            or (
+                state.phase != MailboxThreadIndexPhase.ready
+                and not await self._thread_repo.has_two_month_history(account.id)
+            )
         ):
-            # shortcut: provider pagination keeps its old ordering limits until a refresh uses the ready index.
+            # shortcut: provider pagination keeps its old ordering limits until a refresh uses the index.
             return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
         filters = asdict(params)
         filters.pop("limit")

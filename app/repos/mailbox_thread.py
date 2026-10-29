@@ -33,6 +33,18 @@ class MailboxThreadRepo(BaseRepo[MailboxThread]):
             ),
         )
 
+    async def has_two_month_history(self, account_id: int) -> bool:
+        return bool(
+            await self._db.session.scalar(
+                sa.select(
+                    sa.exists().where(
+                        MailboxThread.account_id == account_id,
+                        MailboxThread.last_message_date <= sa.func.now() - sa.text("INTERVAL '2 months'"),
+                    )
+                )
+            )
+        )
+
     async def create_state(self, account_id: int) -> bool:
         stmt = (
             insert(MailboxThreadIndexState)
