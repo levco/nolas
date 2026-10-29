@@ -9,6 +9,8 @@ services:
       ssh: [default]
     env_file:
       - .env
+    environment:
+      USE_SENTINEL: "false"
     command: bash -c "
       uvicorn main:app --host 0.0.0.0 --port 8001 --lifespan=on --use-colors --loop uvloop --http httptools
       --reload --log-level debug"
@@ -28,6 +30,8 @@ services:
     entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/email_watcher.py'
     env_file:
       - .env
+    environment:
+      USE_SENTINEL: "false"
     volumes:
       - .:/app
       - .:/workers
@@ -40,6 +44,8 @@ services:
     entrypoint: 'watchmedo auto-restart -d "." --recursive --pattern="*.py" -- python workers/nolas_worker.py'
     env_file:
       - .env
+    environment:
+      USE_SENTINEL: "false"
     volumes:
       - .:/app
       - .:/workers

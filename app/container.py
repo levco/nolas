@@ -4,6 +4,7 @@ from typing import cast
 from dependency_injector import containers, providers
 
 from app.controllers.container import ControllerContainer
+from app.init_redis_utils import close_redis_instance
 from app.repos.container import RepoContainer
 from app.services.container import ServiceContainer
 
@@ -34,6 +35,9 @@ async def close_controller_resources(container: ApplicationContainer) -> None:
     ):
         try:
             resource = getattr(container.controllers, name)()
-            await getattr(resource, close_method)()
+            if name == "redis_client":
+                await close_redis_instance(resource)
+            else:
+                await getattr(resource, close_method)()
         except Exception:
             logger.exception("Failed to close %s during shutdown", name)

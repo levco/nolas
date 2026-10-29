@@ -2,7 +2,6 @@ from typing import cast
 
 from dependency_injector import containers, providers
 from lev.services.slack import Slack
-from redis.asyncio import Redis
 
 from app.controllers.email.email_controller import EmailController
 from app.controllers.grant.authorization_controller import AuthorizationController
@@ -27,6 +26,7 @@ from app.controllers.providers.registry import ProviderRegistry
 from app.controllers.providers.token_service import TokenService
 from app.controllers.smtp.smtp_controller import SMTPController
 from app.controllers.webhooks.sender import WebhookSender
+from app.init_redis_utils import get_redis_instance
 from app.repos.container import RepoContainer
 from settings import settings
 
@@ -81,10 +81,9 @@ class ControllerContainer(containers.DeclarativeContainer):
         AuthorizedHttpClient, token_service=token_service, timeout=settings.google.request_timeout
     )
     redis_client = providers.Singleton(
-        Redis.from_url,
-        settings.redis.url,
-        socket_timeout=settings.redis.socket_timeout_seconds,
-        socket_connect_timeout=settings.redis.socket_timeout_seconds,
+        get_redis_instance,
+        settings.redis,
+        settings.use_sentinel,
     )
     microsoft_concurrency_limiter = providers.Singleton(
         MicrosoftConcurrencyLimiter,
