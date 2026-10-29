@@ -1,4 +1,3 @@
-from .processor import JobProcessorController
 from .payloads import (
     GoogleNotificationJobPayload,
     MicrosoftNotificationJobPayload,
@@ -7,7 +6,6 @@ from .payloads import (
 )
 
 __all__ = [
-    "JobProcessorController",
     "GoogleNotificationJobPayload",
     "MicrosoftNotificationJobPayload",
     "SubscriptionRenewalJobPayload",

@@ -30,6 +30,7 @@ from app.controllers.providers.exceptions import (
     ProviderError,
     ProviderNotFoundError,
     ProviderRateLimitError,
+    is_rate_limit_response,
 )
 from app.controllers.providers.folders import folder_attributes
 from app.controllers.providers.google.mapper import (
@@ -216,39 +217,42 @@ class GmailClient(ProviderClient):
         return ListMessagesResult(messages=messages, next_cursor=listing.get("nextPageToken"))
 
     async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
+        thread_ids, next_cursor = await self.list_thread_ids(account, params)
+        messages_by_thread = await self._hydrate_threads(account, thread_ids)
+        all_messages = [message for thread_id in thread_ids for message in messages_by_thread.get(thread_id, [])]
+
+        threads = build_threads_from_messages(all_messages)
+        # shortcut: provider pages sort locally; indexed Inbox/Sent views provide ordering across pages.
+        filtered = filter_threads(threads, all_messages, params)
+        return ListThreadsResult(threads=filtered[: params.limit], next_cursor=next_cursor)
+
+    async def list_thread_ids(self, account: Account, params: ListThreadsParams) -> tuple[list[str], str | None]:
         query = build_gmail_thread_query(params)
         query_params: dict[str, Any] = {"maxResults": params.limit, "q": query}
         if params.page_token:
             query_params["pageToken"] = params.page_token
 
         listing = await self._http.request(account, "GET", f"{GMAIL_API_BASE}/threads", params=query_params)
-        thread_ids = [item["id"] for item in listing.get("threads", [])]
-        messages_by_thread = await self._hydrate_threads(account, thread_ids)
-        all_messages = [message for thread_id in thread_ids for message in messages_by_thread.get(thread_id, [])]
-
-        threads = build_threads_from_messages(all_messages)
-        thread_by_id = {thread.id: thread for thread in threads}
-        ordered_threads = [thread_by_id[thread_id] for thread_id in thread_ids if thread_id in thread_by_id]
-        filtered = filter_threads(ordered_threads, all_messages, params)
-        return ListThreadsResult(threads=filtered[: params.limit], next_cursor=listing.get("nextPageToken"))
+        return [item["id"] for item in listing.get("threads", [])], listing.get("nextPageToken")
 
     async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
+        messages = await self.get_thread_messages(account, thread_id)
+        threads = build_threads_from_messages(messages)
+        return threads[0] if threads else None
+
+    async def get_thread_messages(self, account: Account, thread_id: str) -> list[Message]:
         try:
             thread = await self._http.request(
                 account, "GET", f"{GMAIL_API_BASE}/threads/{thread_id}", params={"format": "full"}
             )
         except ProviderNotFoundError:
-            return None
+            return []
 
-        messages = [
+        return [
             map_gmail_message(raw, account.uuid, include_headers=False)
             for raw in thread.get("messages", [])
             if "DRAFT" not in raw.get("labelIds", [])
         ]
-        if not messages:
-            return None
-        threads = build_threads_from_messages(messages)
-        return threads[0] if threads else None
 
     async def send_message(
         self,
@@ -438,11 +442,13 @@ class GmailClient(ProviderClient):
         await self._http.request(account, "POST", f"{GMAIL_API_BASE}/stop", expect_json=False)
 
     async def list_history(
-        self, account: Account, start_history_id: str, page_token: str | None = None
+        self, account: Account, start_history_id: str, page_token: str | None = None, limit: int | None = None
     ) -> dict[str, Any]:
         # Do not restrict historyTypes here: message.updated notifications depend
         # on labelAdded/labelRemoved records (including Gmail's UNREAD label).
         params: dict[str, Any] = {"startHistoryId": start_history_id}
+        if limit is not None:
+            params["maxResults"] = limit
         if page_token:
             params["pageToken"] = page_token
         return dict(await self._http.request(account, "GET", f"{GMAIL_API_BASE}/history", params=params))
@@ -553,16 +559,10 @@ class GmailClient(ProviderClient):
                 response_body, account, include_headers, valid_message_ids=set(message_ids)
             )
             if rate_limited_ids:
-                logger.warning(
-                    "Gmail batch partially rate limited (%s/%s); retrying those messages individually",
-                    len(rate_limited_ids),
-                    len(message_ids),
-                )
-                messages.update(await self._fetch_messages_individually(account, rate_limited_ids, include_headers))
+                raise ProviderRateLimitError(f"Gmail batch rate limited {len(rate_limited_ids)} subrequest(s)")
             return messages
         except ProviderRateLimitError:
-            logger.warning("Gmail batch request rate limited; falling back to per-message fetch")
-            return await self._fetch_messages_individually(account, message_ids, include_headers)
+            raise
         except ProviderError:
             logger.exception("Gmail batch hydration failed; falling back to per-message fetch")
             return await self._fetch_messages_individually(account, message_ids, include_headers)
@@ -587,7 +587,7 @@ class GmailClient(ProviderClient):
 
             if status_code == 404:
                 continue
-            if status_code == 429:
+            if is_rate_limit_response(status_code, nested_body.decode(errors="ignore")):
                 raw_content_id = self._extract_content_id(part_headers)
                 if raw_content_id is None:
                     raise ProviderRateLimitError("Gmail batch subrequest rate limited and content-id is missing")

@@ -4,7 +4,9 @@ import json
 import uuid
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from app.controllers.providers.base import ListThreadsParams
 from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
@@ -162,72 +164,73 @@ class TestGmailClientBatchHydration:
         assert http.request.await_count == 3
         assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
 
-    def test_fetches_rate_limited_subresponses_individually(self) -> None:
-        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
-            if method == "POST" and url == GMAIL_BATCH_BASE:
-                return _batch_response(
+    @pytest.mark.parametrize("status_code", [403, 429])
+    def test_batch_quota_errors_propagate_without_immediate_individual_fetches(self, status_code: int) -> None:
+        http = Mock(
+            request=AsyncMock(
+                return_value=_batch_response(
                     [
-                        _batch_part("m1", 429, '{"error":{"message":"rate limited"}}'),
+                        _batch_part(
+                            "m1",
+                            status_code,
+                            '{"error":{"message":"Quota exceeded for quota metric Total Query Cost"}}',
+                        ),
                         _batch_part("m2", 200, json.dumps(_raw_message("m2"))),
                     ]
                 )
-            assert method == "GET"
-            assert kwargs["params"] == {"format": "full"}
-            message_id = url.rsplit("/", 1)[-1]
-            return _raw_message(message_id)
+            )
+        )
+        with pytest.raises(ProviderRateLimitError):
+            asyncio.run(GmailClient(http)._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
+        assert http.request.await_count == 1
+        assert http.request.await_args.args[1] == "POST"
 
-        http = SimpleNamespace(request=AsyncMock(side_effect=request))
-        client = GmailClient(http)
+    def test_batch_envelope_quota_error_propagates_unchanged(self) -> None:
+        error = ProviderRateLimitError("envelope quota exceeded", retry_after_seconds=900)
+        http = Mock(request=AsyncMock(side_effect=error))
+        with pytest.raises(ProviderRateLimitError) as caught:
+            asyncio.run(GmailClient(http)._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
+        assert caught.value is error
+        assert http.request.await_count == 1
 
-        messages = asyncio.run(client._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
-
-        assert [message.id for message in messages] == ["m1", "m2"]
-        assert http.request.await_count == 2
-        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
-
-    def test_falls_back_when_batch_envelope_is_rate_limited(self) -> None:
-        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
-            if method == "POST" and url == GMAIL_BATCH_BASE:
-                raise ProviderRateLimitError("envelope rate limited")
-            assert method == "GET"
-            assert kwargs["params"] == {"format": "full"}
-            message_id = url.rsplit("/", 1)[-1]
-            return _raw_message(message_id)
-
-        http = SimpleNamespace(request=AsyncMock(side_effect=request))
-        client = GmailClient(http)
-
-        messages = asyncio.run(client._hydrate_messages(_account(), ["m1", "m2"], include_headers=False))
-
-        assert [message.id for message in messages] == ["m1", "m2"]
-        assert http.request.await_count == 3
-        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
-
-    def test_normalizes_response_content_id_before_rate_limit_fallback(self) -> None:
-        async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
-            if method == "POST" and url == GMAIL_BATCH_BASE:
-                return _batch_response(
-                    [
-                        _batch_part("response-m1+abc", 429, '{"error":{"message":"rate limited"}}'),
-                    ]
-                )
-            assert method == "GET"
-            assert kwargs["params"] == {"format": "full"}
-            message_id = url.rsplit("/", 1)[-1]
-            assert message_id == "m1"
-            return _raw_message(message_id)
-
-        http = SimpleNamespace(request=AsyncMock(side_effect=request))
-        client = GmailClient(http)
-
-        messages = asyncio.run(client._hydrate_messages(_account(), ["m1"], include_headers=False))
-
-        assert [message.id for message in messages] == ["m1"]
-        assert http.request.await_count == 2
-        assert http.request.await_args_list[0].args[2] == GMAIL_BATCH_BASE
+    def test_normalizes_response_content_id_for_rate_limited_subrequests(self) -> None:
+        client = GmailClient(Mock())
+        body = _batch_response([_batch_part("response-m1+abc", 429, '{"error":{"message":"rate limited"}}')])
+        messages, limited_ids = client._parse_batch_response(body, _account(), False, {"m1"})
+        assert messages == {} and limited_ids == ["m1"]
 
 
 class TestGmailClientThreads:
+    @pytest.mark.parametrize("folder", ["INBOX", "SENT"])
+    @pytest.mark.parametrize("page_token", [None, "cursor-1"])
+    def test_sorts_each_page_by_latest_email(self, folder: str, page_token: str | None) -> None:
+        def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
+            assert method == "GET"
+            if url.endswith("/threads"):
+                expected_params = {"maxResults": 2, "q": f"in:{folder} -in:draft"}
+                if page_token is not None:
+                    expected_params["pageToken"] = page_token
+                assert kwargs["params"] == expected_params
+                return {"threads": [{"id": "older"}, {"id": "newer"}], "nextPageToken": "cursor-2"}
+            thread_id = url.rsplit("/", 1)[-1]
+            assert thread_id in {"older", "newer"}
+            message = _raw_thread_message(f"message-{thread_id}", thread_id)
+            message["labelIds"] = [folder]
+            if thread_id == "newer":
+                message["internalDate"] = "1717930000000"
+            return {"id": thread_id, "messages": [message]}
+
+        http = Mock(request=AsyncMock(side_effect=request))
+        client = GmailClient(http)
+
+        result = asyncio.run(
+            client.list_threads(_account(), ListThreadsParams(limit=2, in_=folder, page_token=page_token))
+        )
+
+        assert [thread.id for thread in result.threads] == ["newer", "older"]
+        assert [thread.latest_message_received_date for thread in result.threads] == [1717930000, 1717920000]
+        assert result.next_cursor == "cursor-2"
+
     def test_lists_threads_from_gmail_threads_endpoint(self) -> None:
         async def request(_: Any, method: str, url: str, **kwargs: Any) -> Any:
             assert method == "GET"

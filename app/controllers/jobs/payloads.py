@@ -22,6 +22,13 @@ class SubscriptionRenewalJobPayload(BaseModel):
     account_id: int
 
 
+class MailboxThreadIndexJobPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    account_id: int
+    thread_ids: list[str] = Field(default_factory=list)
+
+
 class WebhookDeliveryJobPayload(BaseModel):
     model_config = {"extra": "forbid"}
 

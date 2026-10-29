@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from app.controllers.providers.exceptions import ProviderRateLimitError
-from app.controllers.providers.http import AuthorizedHttpClient
+from app.controllers.providers.exceptions import ProviderError, ProviderRateLimitError
+from app.controllers.providers.http import AuthorizedHttpClient, _retry_after_seconds
 
 
 @pytest.mark.asyncio
@@ -80,3 +82,46 @@ async def test_pre_authenticated_upload_still_acquires_capacity() -> None:
     limiter.acquire.assert_called_once_with(account)
     token_service.get_access_token.assert_not_awaited()
     assert "Authorization" not in session.request.call_args.kwargs["headers"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        (403, "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'"),
+        (403, '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}'),
+        (429, "Too many requests"),
+    ],
+)
+async def test_quota_responses_are_retryable_without_expiring_the_grant(status: int, body: str) -> None:
+    token_service = AsyncMock()
+    client = AuthorizedHttpClient(token_service, timeout=30)
+    response = Mock(status=status, headers={"Retry-After": "900"}, text=AsyncMock(return_value=body))
+    with pytest.raises(ProviderRateLimitError) as error:
+        await client._handle_response(Mock(), response, True)
+    assert error.value.retry_after_seconds == 900
+    token_service.handle_auth_failure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forbidden_permissions_are_not_treated_as_a_quota_error() -> None:
+    client = AuthorizedHttpClient(AsyncMock(), timeout=30)
+    response = Mock(status=403, headers={}, text=AsyncMock(return_value='{"reason":"insufficientPermissions"}'))
+    with pytest.raises(ProviderError) as error:
+        await client._handle_response(Mock(), response, True)
+    assert not isinstance(error.value, ProviderRateLimitError)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("value,expected", [(None, None), ("120", 120), ("900", 900), ("invalid", None), ("-1", 0)])
+def test_retry_after_seconds_or_invalid_header(value: str | None, expected: int | None) -> None:
+    assert _retry_after_seconds(value) == expected
+
+
+@pytest.mark.parametrize("offset,expected", [(900, 900), (-60, 0)])
+def test_retry_after_http_date(offset: int, expected: int) -> None:
+    now = datetime(2026, 10, 29, tzinfo=UTC)
+    header = format_datetime(now + timedelta(seconds=offset), usegmt=True)
+    with patch("app.controllers.providers.http.datetime") as clock:
+        clock.now.return_value = now
+        assert _retry_after_seconds(header) == expected

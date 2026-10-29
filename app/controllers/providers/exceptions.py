@@ -1,3 +1,9 @@
+def is_rate_limit_response(status_code: int, body: str) -> bool:
+    return status_code == 429 or (
+        status_code == 403 and any(marker in body.lower() for marker in ("rate", "quota", "resource_exhausted"))
+    )
+
+
 class ProviderError(Exception):
     """Base error for provider API failures."""
 
@@ -25,5 +31,8 @@ class ProviderNotFoundError(ProviderError):
 class ProviderRateLimitError(ProviderError):
     """The provider rejected the request due to rate limiting."""
 
-    def __init__(self, message: str = "Provider rate limit exceeded.") -> None:
+    def __init__(
+        self, message: str = "Provider rate limit exceeded.", *, retry_after_seconds: int | None = None
+    ) -> None:
         super().__init__(message, status_code=429, provider_code="RateLimitError")
+        self.retry_after_seconds = retry_after_seconds

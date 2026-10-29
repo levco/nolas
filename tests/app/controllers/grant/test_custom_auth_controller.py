@@ -1,3 +1,4 @@
+from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -5,17 +6,40 @@ import pytest
 from app.controllers.grant.custom_auth_controller import CustomAuthController
 from app.models.account import Account, AccountProvider, AccountStatus
 from app.models.app import App
+from settings import settings
 
 
 def _make_controller() -> tuple[CustomAuthController, AsyncMock, AsyncMock, AsyncMock]:
     account_repo = AsyncMock()
     token_service = AsyncMock()
     subscription_manager = AsyncMock()
-    controller = CustomAuthController(account_repo, token_service, subscription_manager)
+    controller = CustomAuthController(account_repo, token_service, subscription_manager, AsyncMock())
     return controller, account_repo, token_service, subscription_manager
 
 
 class TestCustomAuthController:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["create_grant_from_refresh_token", "update_grant_refresh_token"])
+    @pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
+    async def test_reauthentication_rebuilds_index(
+        self, monkeypatch: pytest.MonkeyPatch, method: str, provider: AccountProvider
+    ) -> None:
+        monkeypatch.setattr(settings, "use_thread_index", True)
+        controller, account_repo, token_service, _ = _make_controller()
+        app = App(id=7)
+        account = Account(id=9, email="user@example.com", provider=provider, provider_context={})
+        account_repo.get_by_app_and_email.return_value = account
+        token_service.validate_refresh_token.return_value = {"access_token": "test-access-token"}
+        controller._fetch_account_email = AsyncMock(return_value=account.email)  # type: ignore[method-assign] Test boundary.
+        with patch(
+            "app.controllers.grant.custom_auth_controller.PasswordUtils.encrypt_password", return_value="encrypted"
+        ):
+            if method == "create_grant_from_refresh_token":
+                await controller.create_grant_from_refresh_token(app, provider, "test-refresh-token")
+            else:
+                await controller.update_grant_refresh_token(app, account, "test-refresh-token")
+        cast(AsyncMock, controller._mailbox_thread_controller).rebuild.assert_awaited_once_with(account.id)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reconnect_method", ["create_grant_from_refresh_token", "update_grant_refresh_token"])
     async def test_microsoft_reconnect_survives_subscription_account_reload(self, reconnect_method: str) -> None:

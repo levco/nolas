@@ -13,6 +13,7 @@ from app.controllers.imap.email_processor import EmailProcessor
 from app.controllers.imap.listener import IMAPListener
 from app.controllers.imap.message_controller import MessageController
 from app.controllers.jobs.processor import JobProcessorController
+from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.controllers.notifications.incoming_controller import IncomingNotificationController
 from app.controllers.notifications.queue import NotificationQueue
 from app.controllers.notifications.renewal_alerts import RenewalAlerts
@@ -116,6 +117,14 @@ class ControllerContainer(containers.DeclarativeContainer):
         imap_adapter=imap_provider_adapter,
     )
 
+    mailbox_thread_controller = providers.Singleton(
+        MailboxThreadController,
+        registry=provider_registry,
+        thread_repo=repos.mailbox_thread,
+        account_repo=repos.account,
+        job_repo=repos.job,
+    )
+
     incoming_notification_controller = providers.Singleton(
         IncomingNotificationController,
         account_repo=repos.account,
@@ -123,6 +132,7 @@ class ControllerContainer(containers.DeclarativeContainer):
         job_repo=repos.job,
         gmail_client=gmail_client,
         graph_client=graph_client,
+        mailbox_thread_controller=mailbox_thread_controller,
     )
 
     subscription_manager = providers.Singleton(
@@ -138,6 +148,7 @@ class ControllerContainer(containers.DeclarativeContainer):
         account_repo=repos.account,
         token_service=token_service,
         subscription_manager=subscription_manager,
+        mailbox_thread_controller=mailbox_thread_controller,
     )
 
     notification_queue = providers.Singleton(
@@ -158,4 +169,5 @@ class ControllerContainer(containers.DeclarativeContainer):
         account_repo=repos.account,
         webhook_sender=webhook_sender,
         renewal_alerts=renewal_alerts,
+        mailbox_thread_controller=mailbox_thread_controller,
     )

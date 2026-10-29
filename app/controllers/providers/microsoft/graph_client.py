@@ -366,6 +366,38 @@ class GraphClient(ProviderClient):
         threads = build_threads_from_messages(messages, unread_from_latest=True)
         return threads[0] if threads else None
 
+    async def get_thread_messages(self, account: Account, thread_id: str) -> list[Message]:
+        params = ListMessagesParams(thread_id=thread_id, limit=100)
+        messages: list[Message] = []
+        seen: set[str] = set()
+        while True:
+            response = await self._list_thread_messages_raw(account, params)
+            messages.extend(self._build_thread_messages(account, response))
+            next_link = response.get("@odata.nextLink")
+            if not next_link:
+                return messages
+            if next_link in seen:
+                raise ProviderError("Microsoft returned a repeated thread page token.")
+            seen.add(next_link)
+            params.page_token = encode_cursor(next_link)
+
+    async def list_thread_changes(
+        self, account: Account, folder_id: str, cursor: str | None = None, *, received_after: int | None = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"$select": "id,conversationId", "$top": 50}
+        if received_after is not None:
+            since = datetime.fromtimestamp(received_after, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["$filter"] = f"receivedDateTime ge {since}"
+        return dict(
+            await self._http.request(
+                account,
+                "GET",
+                cursor or f"{GRAPH_API_BASE}/me/mailFolders/{quote(folder_id, safe='')}/messages/delta",
+                params=None if cursor else params,
+                headers={"Prefer": 'IdType="ImmutableId", odata.maxpagesize=50'},
+            )
+        )
+
     def _build_list_result(
         self, account: Account, response: dict[str, Any], params: ListMessagesParams
     ) -> ListMessagesResult:
@@ -724,7 +756,7 @@ class GraphClient(ProviderClient):
                 "POST",
                 f"{GRAPH_API_BASE}/subscriptions",
                 json_body={
-                    "changeType": "created,updated",
+                    "changeType": "created,updated,deleted",
                     "notificationUrl": notification_url,
                     "resource": "/me/messages",
                     "expirationDateTime": expiration,

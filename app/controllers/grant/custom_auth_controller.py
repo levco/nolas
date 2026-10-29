@@ -3,6 +3,7 @@ import logging
 import aiohttp
 
 from app.controllers.notifications.subscription_manager import SubscriptionManager
+from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.controllers.providers.exceptions import ProviderAuthError, ProviderError
 from app.controllers.providers.token_service import TokenService
 from app.models.account import Account, AccountProvider, AccountStatus
@@ -28,10 +29,12 @@ class CustomAuthController:
         account_repo: AccountRepo,
         token_service: TokenService,
         subscription_manager: SubscriptionManager,
+        mailbox_thread_controller: MailboxThreadController,
     ) -> None:
         self._account_repo = account_repo
         self._token_service = token_service
         self._subscription_manager = subscription_manager
+        self._mailbox_thread_controller = mailbox_thread_controller
 
     async def create_grant_from_refresh_token(self, app: App, provider: AccountProvider, refresh_token: str) -> Account:
         token_payload = await self._token_service.validate_refresh_token(provider, refresh_token, app)
@@ -46,6 +49,8 @@ class CustomAuthController:
 
         account = await self._account_repo.get_by_app_and_email(app.id, email)
         if account is not None:
+            if MailboxThreadController.is_enabled(provider):
+                await self._account_repo.acquire_notification_lock(account.id)
             # Re-auth of an existing grant: keep the UUID (grant id) stable.
             context = {
                 key: value
@@ -76,6 +81,8 @@ class CustomAuthController:
         account.app = app
         # Microsoft token refresh reloads the account during subscription setup.
         await self._account_repo.flush()
+        if MailboxThreadController.is_enabled(provider):
+            await self._mailbox_thread_controller.rebuild(account.id)
 
         # Best-effort: the renewal worker heals missing watches/subscriptions.
         try:
@@ -94,6 +101,8 @@ class CustomAuthController:
         token_email = await self._fetch_account_email(account.provider, token_payload["access_token"])
         if token_email is None or token_email.lower() != account.email.lower():
             raise ProviderAuthError(f"Refresh token belongs to a different mailbox than grant {account.uuid}.")
+        if MailboxThreadController.is_enabled(account.provider):
+            await self._account_repo.acquire_notification_lock(account.id)
         context = {
             key: value
             for key, value in (account.provider_context or {}).items()
@@ -111,6 +120,8 @@ class CustomAuthController:
         )
         # Preserve the new status and credentials before token refresh reloads the account.
         await self._account_repo.flush()
+        if MailboxThreadController.is_enabled(account.provider):
+            await self._mailbox_thread_controller.rebuild(account.id)
         try:
             await self._subscription_manager.ensure_subscription(account)
         except Exception:

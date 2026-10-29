@@ -67,15 +67,17 @@ class JobRepo(BaseRepo[Job]):
         job.locked_by = None
         await self.flush()
 
-    async def mark_retry_or_failed(self, job: Job, error: str, retry_delay_seconds: int) -> None:
-        next_attempt = job.attempts + 1
-        job.attempts = next_attempt
+    async def mark_retry_or_failed(
+        self, job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool = True
+    ) -> None:
+        if count_attempt:
+            job.attempts += 1
         job.last_error = error[:4000]
         job.completed_at = None
         job.locked_at = None
         job.locked_by = None
 
-        if next_attempt >= job.max_attempts:
+        if count_attempt and job.attempts >= job.max_attempts:
             job.status = JobStatus.failed
             await self.flush()
             return

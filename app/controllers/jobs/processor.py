@@ -3,11 +3,13 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.controllers.jobs.payloads import (
+    MailboxThreadIndexJobPayload,
     GoogleNotificationJobPayload,
     MicrosoftNotificationJobPayload,
     SubscriptionRenewalJobPayload,
     WebhookDeliveryJobPayload,
 )
+from app.controllers.mailbox_thread_controller import MailboxThreadController
 from app.controllers.notifications.incoming_controller import (
     IncomingNotificationController,
 )
@@ -15,6 +17,7 @@ from app.controllers.notifications.subscription_manager import SubscriptionManag
 from app.controllers.notifications.renewal_alerts import RenewalAlerts
 from app.controllers.webhooks.sender import WebhookSender
 from app.controllers.providers.microsoft.concurrency_limiter import microsoft_worker_requests
+from app.controllers.providers.exceptions import ProviderRateLimitError
 from app.exceptions import WebhookDeliveryError
 from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobStatus, JobType
@@ -36,6 +39,7 @@ class JobProcessorController:
         account_repo: AccountRepo,
         webhook_sender: WebhookSender,
         renewal_alerts: RenewalAlerts,
+        mailbox_thread_controller: MailboxThreadController,
     ) -> None:
         self._job_repo = job_repo
         self._incoming_notification_controller = incoming_notification_controller
@@ -43,6 +47,7 @@ class JobProcessorController:
         self._account_repo = account_repo
         self._webhook_sender = webhook_sender
         self._renewal_alerts = renewal_alerts
+        self._mailbox_thread_controller = mailbox_thread_controller
 
     async def enqueue_google_notification(self, email_address: str, history_id: str) -> Job | None:
         normalized_email = email_address.lower()
@@ -116,10 +121,21 @@ class JobProcessorController:
             with microsoft_worker_requests():
                 await self._dispatch(job)
         except Exception as exc:
+            rate_limited = isinstance(exc, ProviderRateLimitError)
             retry_delay = self._retry_delay_seconds(job.attempts + 1)
-            await self._job_repo.mark_retry_or_failed(job, str(exc), retry_delay_seconds=retry_delay)
+            if isinstance(exc, ProviderRateLimitError):
+                retry_delay = max(300, exc.retry_after_seconds or 0)
+            await self._job_repo.mark_retry_or_failed(
+                job, str(exc), retry_delay_seconds=retry_delay, count_attempt=not rate_limited
+            )
             logger.warning(
-                f"Job {job.id} ({job.type.name}) failed (attempt {job.attempts}/{job.max_attempts}): {exc}",
+                "Job %s (%s) error (counted failures %s/%s; retry delay %ss): %s",
+                job.id,
+                job.type.name,
+                job.attempts,
+                job.max_attempts,
+                retry_delay,
+                exc,
                 exc_info=True,
             )
             return
@@ -127,6 +143,11 @@ class JobProcessorController:
         await self._job_repo.mark_completed(job)
 
     async def _dispatch(self, job: Job) -> None:
+        if job.type == JobType.mailbox_thread_index:
+            await self._mailbox_thread_controller.process_index_job(
+                MailboxThreadIndexJobPayload.model_validate(job.payload)
+            )
+            return
         if job.type == JobType.google_notification:
             google_payload = GoogleNotificationJobPayload.model_validate(job.payload)
             email_address = google_payload.email_address.strip().lower()

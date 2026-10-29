@@ -120,6 +120,7 @@ class SlackSettings(BaseSettings):
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "allow"}
 
+    use_thread_index: bool = Field(alias="USE_THREAD_INDEX", default=True)
     environment: EnvironmentName = Field(alias="ENVIRONMENT")
     password_encryption_key: str = Field(alias="PASSWORD_ENCRYPTION_KEY")
 

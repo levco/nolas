@@ -18,9 +18,12 @@ from app.api.v3.grants import threads as threads_api
 from app.controllers.providers.base import ListThreadsParams, ListThreadsResult
 from app.models.account import Account, AccountProvider
 from app.models.app import App
+from settings import settings
 
 
-async def request_threads(provider: Mock, grant_id: str, query: dict[str, object]) -> tuple[int, dict[str, Any]]:
+async def request_threads(
+    provider: Mock, grant_id: str, query: dict[str, object], indexed: Mock | None = None
+) -> tuple[int, dict[str, Any]]:
     app = FastAPI()
     app.include_router(router, prefix="/v3/grants")
     app.dependency_overrides[get_current_app] = lambda: App(id=1)
@@ -29,6 +32,12 @@ async def request_threads(provider: Mock, grant_id: str, query: dict[str, object
             dependency = next(dep for dep in route.dependant.dependencies if dep.name == "registry")
             assert dependency.call is not None
             app.dependency_overrides[dependency.call] = lambda: Mock(get_client=lambda _: provider)
+            indexed_dependency = next(
+                dep for dep in route.dependant.dependencies if dep.name == "mailbox_thread_controller"
+            )
+            assert indexed_dependency.call is not None
+            index_controller = indexed if indexed is not None else Mock(list_threads=provider.list_threads)
+            app.dependency_overrides[indexed_dependency.call] = lambda: index_controller
     responses: list[ASGIMessage] = []
 
     async def send(message: ASGIMessage) -> None:
@@ -73,6 +82,24 @@ def thread() -> Thread:
         latest_message_received_date=123,
         earliest_message_date=123,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("provider_name", [AccountProvider.google, AccountProvider.microsoft])
+async def test_index_flag_routes_through_indexed_controller(
+    monkeypatch: pytest.MonkeyPatch, thread: Thread, enabled: bool, provider_name: AccountProvider
+) -> None:
+    monkeypatch.setattr(settings, "use_thread_index", enabled)
+    account = Account(id=1, uuid=uuid.uuid4(), provider=provider_name)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    indexed = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([thread], "indexed-cursor")))
+    provider = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([thread], "provider-cursor")))
+    status, body = await request_threads(provider, str(account.uuid), {"in": "INBOX", "limit": 10}, indexed)
+    assert status == 200 and body["next_cursor"] == ("indexed-cursor" if enabled else "provider-cursor")
+    selected, unused = (indexed, provider) if enabled else (provider, indexed)
+    selected.list_threads.assert_awaited_once_with(account, ListThreadsParams(in_="INBOX", limit=10))
+    unused.list_threads.assert_not_awaited()
 
 
 @pytest.mark.asyncio

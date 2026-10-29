@@ -11,6 +11,7 @@ from .decorators.types import EnumStringType
 
 
 class JobType(Enum):
+    mailbox_thread_index = "mailbox_thread_index"
     google_notification = "google_notification"
     microsoft_notification = "microsoft_notification"
     subscription_renewal = "subscription_renewal"
