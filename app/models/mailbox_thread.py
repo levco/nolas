@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 import sqlalchemy as sa
@@ -6,6 +7,13 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
+from .decorators.types import EnumStringType
+
+
+class MailboxThreadIndexPhase(Enum):
+    backfill = "backfill"
+    catchup = "catchup"
+    ready = "ready"
 
 
 class MailboxThread(Base):
@@ -43,7 +51,9 @@ class MailboxThreadIndexState(Base):
     account_id: Mapped[int] = mapped_column(
         sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
     )
-    phase: Mapped[str] = mapped_column(sa.String(16), nullable=False, default="backfill")
+    phase: Mapped[MailboxThreadIndexPhase] = mapped_column(
+        EnumStringType(MailboxThreadIndexPhase), nullable=False, default=MailboxThreadIndexPhase.backfill
+    )
     page_token: Mapped[str | None] = mapped_column(sa.Text)
     history_id: Mapped[str | None] = mapped_column(sa.String(255))
     provider_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

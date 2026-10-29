@@ -17,7 +17,7 @@ from app.controllers.providers.exceptions import ProviderError, ProviderNotFound
 from app.controllers.providers.microsoft.graph_client import GraphClient
 from app.controllers.providers.threads import build_threads_from_messages
 from app.models.account import Account, AccountProvider, AccountStatus
-from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexState
+from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexPhase, MailboxThreadIndexState
 from app.repos.mailbox_thread import MailboxThreadRepo
 
 
@@ -39,7 +39,9 @@ def controller(account: Account) -> ControllerFixture:
     gmail = AsyncMock()
     registry = Mock(get_gmail=Mock(return_value=gmail))
     thread_repo = AsyncMock()
-    thread_repo.get_state.return_value = MailboxThreadIndexState(account_id=account.id, phase="ready")
+    thread_repo.get_state.return_value = MailboxThreadIndexState(
+        account_id=account.id, phase=MailboxThreadIndexPhase.ready
+    )
     account_repo = AsyncMock()
     account_repo.get_by_id_with_app.return_value = account
     job_repo = AsyncMock()
@@ -168,9 +170,9 @@ async def test_cursor_cannot_be_reused_for_another_mailbox_or_filter(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
-@pytest.mark.parametrize("phase", [None, "backfill", "catchup"])
+@pytest.mark.parametrize("phase", [None, MailboxThreadIndexPhase.backfill, MailboxThreadIndexPhase.catchup])
 async def test_preparing_index_returns_provider_page_and_only_enqueues_once(
-    controller: ControllerFixture, account: Account, provider: AccountProvider, phase: str | None
+    controller: ControllerFixture, account: Account, provider: AccountProvider, phase: MailboxThreadIndexPhase | None
 ) -> None:
     account.provider = provider
     controller.thread_repo.get_state.return_value = (
@@ -197,14 +199,14 @@ async def test_provider_pagination_survives_index_becoming_ready(
     controller: ControllerFixture, account: Account, provider: AccountProvider
 ) -> None:
     account.provider = provider
-    state = MailboxThreadIndexState(account_id=account.id, phase="backfill")
+    state = MailboxThreadIndexState(account_id=account.id, phase=MailboxThreadIndexPhase.backfill)
     controller.thread_repo.get_state.return_value = state
     expected = [ListThreadsResult([], "provider-page-2"), ListThreadsResult([])]
     provider_client = AsyncMock(list_threads=AsyncMock(side_effect=expected))
     controller.registry.get_client.return_value = provider_client
     params = ListThreadsParams(in_="INBOX", limit=10)
     first = await controller.subject.list_threads(account, params)
-    state.phase = "ready"
+    state.phase = MailboxThreadIndexPhase.ready
     second_params = replace(params, page_token=first.next_cursor)
     second = await controller.subject.list_threads(account, second_params)
     assert first is expected[0] and second is expected[1]
@@ -226,7 +228,7 @@ async def test_rebuilding_index_restarts_provider_pagination_without_forwarding_
     params = ListThreadsParams(in_="INBOX", limit=1)
     first = await controller.subject.list_threads(account, params)
     assert first.next_cursor and first.next_cursor.startswith("index:")
-    controller.thread_repo.get_state.return_value.phase = "backfill"
+    controller.thread_repo.get_state.return_value.phase = MailboxThreadIndexPhase.backfill
     provider_client = AsyncMock(list_threads=AsyncMock(return_value=ListThreadsResult([], "provider-next")))
     controller.registry.get_client.return_value = provider_client
     result = await controller.subject.list_threads(account, replace(params, page_token=first.next_cursor))
@@ -266,7 +268,7 @@ async def test_index_job_initializes_missing_state_and_fetches_its_first_batch(
     controller: ControllerFixture, account: Account, provider: AccountProvider
 ) -> None:
     account.provider = provider
-    state = MailboxThreadIndexState(account_id=account.id, phase="backfill")
+    state = MailboxThreadIndexState(account_id=account.id, phase=MailboxThreadIndexPhase.backfill)
     controller.thread_repo.get_state.side_effect = [None, state]
     now = int(controller.job_repo.db_now.return_value.timestamp())
     client = AsyncMock()
@@ -290,7 +292,7 @@ async def test_index_job_initializes_missing_state_and_fetches_its_first_batch(
     controller.thread_repo.create_state.assert_awaited_once_with(account.id)
     client.get_thread_messages.assert_awaited_once_with(account, "thread")
     assert controller.thread_repo.upsert.await_args.args == (account.id, "thread", [message("thread", now)])
-    assert state.phase == "backfill" and state.page_token == "next"
+    assert state.phase == MailboxThreadIndexPhase.backfill and state.page_token == "next"
     controller.job_repo.enqueue.assert_awaited_once()
 
 
@@ -310,7 +312,9 @@ async def test_missing_state_that_cannot_be_initialized_is_retried_instead_of_co
 async def test_backfill_resumes_one_batch_then_catches_changes_before_becoming_ready(
     controller: ControllerFixture, account: Account
 ) -> None:
-    state = MailboxThreadIndexState(account_id=1, phase="backfill", history_id=None, page_token=None)
+    state = MailboxThreadIndexState(
+        account_id=1, phase=MailboxThreadIndexPhase.backfill, history_id=None, page_token=None
+    )
     controller.thread_repo.get_state.return_value = state
     gmail = controller.registry.get_gmail()
     gmail.get_profile.return_value = {"historyId": "start"}
@@ -319,14 +323,14 @@ async def test_backfill_resumes_one_batch_then_catches_changes_before_becoming_r
     job = MailboxThreadIndexJobPayload(account_id=account.id)
 
     await controller.subject.process_index_job(job)
-    assert (state.phase, state.page_token, state.history_id) == ("backfill", "next", "start")
+    assert (state.phase, state.page_token, state.history_id) == (MailboxThreadIndexPhase.backfill, "next", "start")
     cutoff = int(datetime(2024, 10, 29, tzinfo=UTC).timestamp())
     assert gmail.list_thread_ids.await_args.args[1].latest_message_after == cutoff
     assert state.provider_state == {"received_after": cutoff}
     assert gmail.list_thread_ids.await_count == 1
     controller.job_repo.db_now.return_value = datetime(2026, 11, 1, tzinfo=UTC)
     await controller.subject.process_index_job(job)
-    assert state.phase == "catchup"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.catchup, None)
     assert gmail.list_thread_ids.await_args.args[1].page_token == "next"
     assert gmail.list_thread_ids.await_args.args[1].latest_message_after == cutoff
     gmail.list_history.return_value = {
@@ -335,7 +339,7 @@ async def test_backfill_resumes_one_batch_then_catches_changes_before_becoming_r
     gmail.get_thread_messages.return_value = []
     gmail.get_thread_messages.side_effect = None
     await controller.subject.process_index_job(job)
-    assert state.phase == "ready"
+    assert state.phase == MailboxThreadIndexPhase.ready
     controller.thread_repo.upsert.assert_awaited_with(account.id, "a", [])
     assert gmail.get_profile.await_count == 1
     assert controller.job_repo.enqueue.await_count == 2
@@ -347,7 +351,9 @@ async def test_live_google_updates_survive_backfill_and_arrivals_between_catchup
 ) -> None:
     account.email = "user@example.com"
     account.provider_context = {"history_id": "notification-start"}
-    state = MailboxThreadIndexState(account_id=account.id, phase="backfill", history_id="index-start")
+    state = MailboxThreadIndexState(
+        account_id=account.id, phase=MailboxThreadIndexPhase.backfill, history_id="index-start"
+    )
     controller.thread_repo.get_state.return_value = state
     controller.account_repo.get_all_by_email_and_provider.return_value = [account]
     gmail = controller.registry.get_gmail()
@@ -371,10 +377,10 @@ async def test_live_google_updates_survive_backfill_and_arrivals_between_catchup
     source["existing"] = [message("existing", now + 1)]
     gmail.list_history.return_value = {"history": [{"messages": [{"threadId": "existing"}]}]}
     await incoming.process_google_notification(account.email, "reply")
-    assert state.phase == "backfill"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.backfill, "next")
     assert indexed["existing"][0].date == now + 1
     await controller.subject.process_index_job(job)
-    assert state.phase == "catchup"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.catchup, None)
     assert indexed["existing"][0].date == now + 1
 
     gmail.list_history.return_value = {"history": [], "nextPageToken": "history-next"}
@@ -382,13 +388,13 @@ async def test_live_google_updates_survive_backfill_and_arrivals_between_catchup
     source["new-thread"] = [message("new-thread", now + 2)]
     gmail.list_history.return_value = {"history": [{"messages": [{"threadId": "new-thread"}]}]}
     await incoming.process_google_notification(account.email, "new-mail")
-    assert state.phase == "catchup"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.catchup, "history-next")
     assert indexed["new-thread"][0].date == now + 2
 
     # The final catch-up page need not include mail covered by a live notification.
     gmail.list_history.return_value = {"history": []}
     await controller.subject.process_index_job(job)
-    assert state.phase == "ready"
+    assert state.phase == MailboxThreadIndexPhase.ready
     assert {thread: messages[0].date for thread, messages in indexed.items()} == {
         "existing": now + 1,
         "new-thread": now + 2,
@@ -400,7 +406,7 @@ async def test_live_google_updates_survive_backfill_and_arrivals_between_catchup
 async def test_expired_history_restarts_backfill_instead_of_publishing_partial_index(
     controller: ControllerFixture, account: Account
 ) -> None:
-    state = MailboxThreadIndexState(account_id=1, phase="catchup", history_id="expired")
+    state = MailboxThreadIndexState(account_id=1, phase=MailboxThreadIndexPhase.catchup, history_id="expired")
     controller.thread_repo.get_state.return_value = state
     controller.registry.get_gmail().list_history.side_effect = ProviderNotFoundError()
     await controller.subject.process_index_job(MailboxThreadIndexJobPayload(account_id=account.id))
@@ -413,21 +419,23 @@ async def test_expired_history_restarts_backfill_instead_of_publishing_partial_i
 async def test_failed_batch_keeps_its_cursor_for_retry(
     controller: ControllerFixture, account: Account, error: ProviderError
 ) -> None:
-    state = MailboxThreadIndexState(account_id=1, phase="backfill", history_id="start", page_token="retry-this")
+    state = MailboxThreadIndexState(
+        account_id=1, phase=MailboxThreadIndexPhase.backfill, history_id="start", page_token="retry-this"
+    )
     controller.thread_repo.get_state.return_value = state
     gmail = controller.registry.get_gmail()
     gmail.list_thread_ids.return_value = (["a"], "next")
     gmail.get_thread_messages.side_effect = error
     with pytest.raises(ProviderError):
         await controller.subject.process_index_job(MailboxThreadIndexJobPayload(account_id=account.id))
-    assert state.page_token == "retry-this" and state.phase == "backfill"
+    assert state.page_token == "retry-this" and state.phase == MailboxThreadIndexPhase.backfill
     controller.job_repo.enqueue.assert_not_awaited()
     gmail.get_thread_messages.side_effect = None
     gmail.get_thread_messages.return_value = [message("a", 100)]
     await controller.subject.process_index_job(MailboxThreadIndexJobPayload(account_id=account.id))
     params = gmail.list_thread_ids.await_args.args[1]
     assert params.page_token == "retry-this" and params.limit == 25
-    assert state.page_token == "next" and state.phase == "backfill"
+    assert state.page_token == "next" and state.phase == MailboxThreadIndexPhase.backfill
     controller.job_repo.enqueue.assert_awaited_once()
 
 
@@ -512,7 +520,7 @@ async def test_microsoft_backfills_beyond_5000_messages_without_hydrating_old_on
 ) -> None:
     controller = microsoft_controller
     state = controller.thread_repo.get_state.return_value
-    state.phase = "backfill"
+    state.phase = MailboxThreadIndexPhase.backfill
     now = int(controller.job_repo.db_now.return_value.timestamp())
     entries = [
         {"id": f"m-{index}", "conversationId": f"t-{index}", "receivedDateTime": "2026-10-29T00:00:00Z"}
@@ -560,7 +568,7 @@ async def test_microsoft_backfills_beyond_5000_messages_without_hydrating_old_on
     assert controller.job_repo.enqueue.await_count == len(pages)
     progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
     assert progress.folder_index == 1 and "inbox-id" in progress.delta_links
-    assert state.phase == "backfill" and state.page_token is None
+    assert state.phase == MailboxThreadIndexPhase.backfill and state.page_token is None
 
 
 @pytest.mark.asyncio
@@ -568,7 +576,7 @@ async def test_microsoft_backfill_resumes_catches_up_and_schedules_incremental_s
     microsoft_controller: ControllerFixture, account: Account
 ) -> None:
     controller = microsoft_controller
-    state = MailboxThreadIndexState(account_id=1, phase="backfill")
+    state = MailboxThreadIndexState(account_id=1, phase=MailboxThreadIndexPhase.backfill)
     controller.thread_repo.get_state.return_value = state
     graph = controller.registry.get_graph()
     graph.get_folder.side_effect = [FolderData(id="inbox-id", name="Inbox"), FolderData(id="sent-id", name="Sent")]
@@ -582,13 +590,13 @@ async def test_microsoft_backfill_resumes_catches_up_and_schedules_incremental_s
     graph.get_thread_messages.return_value = [message("a", 100)]
     job = MailboxThreadIndexJobPayload(account_id=account.id)
     await controller.subject.process_index_job(job)
-    assert state.phase == "backfill" and state.page_token == "inbox-page-2"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.backfill, "inbox-page-2")
     cutoff = int(datetime(2024, 10, 29, tzinfo=UTC).timestamp())
     assert graph.list_thread_changes.await_args.kwargs == {"received_after": cutoff}
     await controller.subject.process_index_job(job)
     assert graph.list_thread_changes.await_args.args == (account, "inbox-id", "inbox-page-2")
     await controller.subject.process_index_job(job)
-    assert state.phase == "catchup"
+    assert (state.phase, state.page_token) == (MailboxThreadIndexPhase.catchup, None)
     controller.thread_repo.thread_ids_for_messages.return_value = ["a"]
     graph.get_thread_messages.return_value = []
     await controller.subject.process_index_job(job)
@@ -596,7 +604,7 @@ async def test_microsoft_backfill_resumes_catches_up_and_schedules_incremental_s
     controller.thread_repo.upsert.assert_awaited_with(account.id, "a", [], provider=AccountProvider.microsoft)
     controller.thread_repo.thread_ids_for_messages.return_value = []
     await controller.subject.process_index_job(job)
-    assert state.phase == "ready"
+    assert state.phase == MailboxThreadIndexPhase.ready
     progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
     assert progress.delta_links == {"inbox-id": "inbox-delta-2", "sent-id": "sent-delta-2"}
     assert progress.received_after == cutoff
@@ -611,7 +619,7 @@ async def test_microsoft_backfill_resumes_catches_up_and_schedules_incremental_s
     graph.list_thread_changes.side_effect = None
     graph.list_thread_changes.return_value = {"value": [], "@odata.deltaLink": "inbox-delta-3"}
     await controller.subject.process_index_job(job)
-    assert state.phase == "ready"
+    assert state.phase == MailboxThreadIndexPhase.ready
     assert graph.list_thread_changes.await_args.args == (account, "inbox-id", "inbox-delta-2")
 
 
@@ -667,7 +675,7 @@ async def test_microsoft_failed_refresh_keeps_delta_cursor_for_retry(
 ) -> None:
     controller = microsoft_controller
     state = controller.thread_repo.get_state.return_value
-    state.phase, state.page_token = "backfill", "retry-this"
+    state.phase, state.page_token = MailboxThreadIndexPhase.backfill, "retry-this"
     before = dict(state.provider_state)
     graph = controller.registry.get_graph()
     graph.list_thread_changes.return_value = {

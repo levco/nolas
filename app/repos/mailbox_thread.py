@@ -10,7 +10,7 @@ from app.controllers.providers.base import ListThreadsParams
 from app.controllers.providers.exceptions import ProviderError
 from app.controllers.providers.threads import build_threads_from_messages
 from app.models.account import AccountProvider
-from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexState
+from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexPhase, MailboxThreadIndexState
 from app.repos.base import BaseRepo
 
 
@@ -36,7 +36,7 @@ class MailboxThreadRepo(BaseRepo[MailboxThread]):
     async def create_state(self, account_id: int) -> bool:
         stmt = (
             insert(MailboxThreadIndexState)
-            .values(account_id=account_id, phase="backfill")
+            .values(account_id=account_id, phase=MailboxThreadIndexPhase.backfill)
             .on_conflict_do_nothing(index_elements=["account_id"])
             .returning(MailboxThreadIndexState.id)
         )
@@ -44,7 +44,7 @@ class MailboxThreadRepo(BaseRepo[MailboxThread]):
 
     async def reset(self, state: MailboxThreadIndexState) -> None:
         await self._db.session.execute(sa.delete(MailboxThread).where(MailboxThread.account_id == state.account_id))
-        state.phase, state.page_token, state.history_id = "backfill", None, None
+        state.phase, state.page_token, state.history_id = MailboxThreadIndexPhase.backfill, None, None
         state.provider_state = None
 
     async def remove(self, account_id: int, thread_id: str) -> None:

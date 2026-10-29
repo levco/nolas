@@ -16,7 +16,7 @@ from app.controllers.providers.google.gmail_client import FALLBACK_FETCH_CONCURR
 from app.controllers.providers.registry import ProviderRegistry
 from app.models.account import Account, AccountProvider, AccountStatus
 from app.models.job import JobType
-from app.models.mailbox_thread import MailboxThreadIndexState
+from app.models.mailbox_thread import MailboxThreadIndexPhase, MailboxThreadIndexState
 from app.repos.account import AccountRepo
 from app.repos.job import JobRepo
 from app.repos.mailbox_thread import MailboxThreadRepo
@@ -94,7 +94,7 @@ class MailboxThreadController:
                 await self._enqueue(account.id)
         if (
             state is None
-            or state.phase != "ready"
+            or state.phase != MailboxThreadIndexPhase.ready
             or (params.page_token and not params.page_token.startswith(INDEX_CURSOR_PREFIX))
         ):
             # shortcut: provider pagination keeps its old ordering limits until a refresh uses the ready index.
@@ -195,7 +195,7 @@ class MailboxThreadController:
         if account.provider == AccountProvider.microsoft:
             await self._process_microsoft_index(account, state)
             return
-        if state.phase == "ready":
+        if state.phase == MailboxThreadIndexPhase.ready:
             return
         received_after = await self._index_since(state)
         state.provider_state = {"received_after": received_after}
@@ -203,7 +203,7 @@ class MailboxThreadController:
         if state.history_id is None:
             profile = await gmail.get_profile(account)
             state.history_id = str(profile["historyId"])
-        if state.phase == "backfill":
+        if state.phase == MailboxThreadIndexPhase.backfill:
             thread_ids, next_token = await gmail.list_thread_ids(
                 account, ListThreadsParams(limit=25, page_token=state.page_token, latest_message_after=received_after)
             )
@@ -212,7 +212,7 @@ class MailboxThreadController:
             await self._refresh_threads(account, thread_ids, received_after=received_after)
             state.page_token = next_token
             if not next_token:
-                state.phase = "catchup"
+                state.phase = MailboxThreadIndexPhase.catchup
         else:
             try:
                 history = await gmail.list_history(account, state.history_id, state.page_token, limit=50)
@@ -227,9 +227,9 @@ class MailboxThreadController:
                 raise ProviderError("Google returned a repeated history page token.")
             state.page_token = next_token
             if not next_token:
-                state.phase = "ready"
+                state.phase = MailboxThreadIndexPhase.ready
         await self._thread_repo.flush()
-        if state.phase != "ready":
+        if state.phase != MailboxThreadIndexPhase.ready:
             await self._enqueue(account.id)
 
     async def _process_microsoft_index(self, account: Account, state: MailboxThreadIndexState) -> None:
@@ -247,7 +247,7 @@ class MailboxThreadController:
             progress.received_after = await self._index_since(state)
             state.provider_state = progress.model_dump(mode="json")
         if (
-            state.phase == "ready"
+            state.phase == MailboxThreadIndexPhase.ready
             and progress.folder_index == 0
             and not state.page_token
             and now < progress.next_sync_at
@@ -288,10 +288,10 @@ class MailboxThreadController:
             progress.folder_index += 1
             if progress.folder_index == 2:
                 progress.folder_index = 0
-                if state.phase == "backfill":
-                    state.phase = "catchup"
+                if state.phase == MailboxThreadIndexPhase.backfill:
+                    state.phase = MailboxThreadIndexPhase.catchup
                 else:
-                    state.phase = "ready"
+                    state.phase = MailboxThreadIndexPhase.ready
                     delay = 300
                     progress.next_sync_at = now + delay
         state.provider_state = progress.model_dump(mode="json")

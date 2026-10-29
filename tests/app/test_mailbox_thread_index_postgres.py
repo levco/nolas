@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.controllers.providers.base import ListThreadsParams
-from app.models.mailbox_thread import MailboxThread
+from app.models.mailbox_thread import MailboxThread, MailboxThreadIndexPhase, MailboxThreadIndexState
 from app.repos.mailbox_thread import MailboxThreadRepo
 
 
@@ -165,3 +165,26 @@ def test_timestamp_filters_accept_epoch_query_parameters(session: Session) -> No
     session.execute(sa.insert(MailboxThread), [row("before", 100), row("matching", 200), row("after", 300)])
     params = ListThreadsParams(latest_message_after=150, latest_message_before=250)
     assert [thread.thread_id for thread in session.scalars(MailboxThreadRepo.page_query(1, params))] == ["matching"]
+
+
+@pytest.mark.parametrize("phase", list(MailboxThreadIndexPhase))
+def test_phase_enum_reads_existing_strings_and_writes_to_the_original_schema(
+    session: Session, phase: MailboxThreadIndexPhase
+) -> None:
+    session.execute(
+        sa.text("INSERT INTO mailbox_thread_index_states (account_id, phase) VALUES (1, :phase)"),
+        {"phase": phase.value},
+    )
+    state = session.scalars(sa.select(MailboxThreadIndexState)).one()
+    assert state.phase is phase
+    updated = (
+        MailboxThreadIndexPhase.ready if phase != MailboxThreadIndexPhase.ready else MailboxThreadIndexPhase.backfill
+    )
+    state.phase = updated
+    session.flush()
+    session.expire_all()
+    assert state.phase is updated
+    assert session.execute(sa.text("SELECT phase FROM mailbox_thread_index_states")).scalar_one() == updated.value
+    columns = sa.inspect(session.connection()).get_columns("mailbox_thread_index_states")
+    phase_type = next(column["type"] for column in columns if column["name"] == "phase")
+    assert isinstance(phase_type, sa.String) and phase_type.length == 16
