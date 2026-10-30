@@ -423,3 +423,35 @@ def test_multi_folder_pages_keep_every_matching_thread_and_provider_cursor(with_
     else:
         assert "(parentFolderId eq 'inbox-id' or parentFolderId eq 'sent-id')" in query["$filter"]
     assert second_request.args[2] == next_link
+
+
+@pytest.mark.parametrize("has_match", [True, False])
+def test_multi_folder_search_skips_empty_filtered_pages(has_match: bool) -> None:
+    next_link = "https://graph.microsoft.com/v1.0/me/messages?$skip=1"
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[
+                {
+                    "value": [
+                        {**_raw_graph_message("archive", "archive", is_read=True), "parentFolderId": "archive-id"}
+                    ],
+                    "@odata.nextLink": next_link,
+                },
+                {
+                    "value": (
+                        [{**_raw_graph_message("inbox", "inbox", is_read=True), "parentFolderId": "inbox-id"}]
+                        if has_match
+                        else []
+                    ),
+                },
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    params = ListThreadsParams(in_=["inbox-id", "sent-id"], search_query_native="subject:report", limit=1)
+
+    result = asyncio.run(client.list_threads(account, params))
+    assert [thread.id for thread in result.threads] == (["inbox"] if has_match else [])
+    assert result.next_cursor is None
+    assert http.request.await_args_list[1].args[2] == next_link

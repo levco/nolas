@@ -90,9 +90,9 @@ class MailboxThreadController:
             progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
             aliases = {"inbox": progress.inbox_id, "sent": progress.sent_id, "sentitems": progress.sent_id}
             folders = sorted({aliases.get(folder.lower(), folder) for folder in folders})
+            params = replace(params, in_=folders if len(folders) > 1 else folders[0])
             if not set(folders) <= {progress.inbox_id, progress.sent_id}:
                 return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
-            params = replace(params, in_=folders if len(folders) > 1 else folders[0])
         if state is None:
             if await self._thread_repo.create_state(account.id):
                 await self._enqueue(account.id)

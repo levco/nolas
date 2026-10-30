@@ -350,15 +350,18 @@ class GraphClient(ProviderClient):
             unread=params.unread,
             search_query_native=params.search_query_native,
         )
-        response = await self._list_thread_messages_raw(account, message_params)
-        messages = self._build_thread_messages(account, response)
-        threads = build_threads_from_messages(messages, unread_from_latest=True)
-        # shortcut: Graph search applies folder matching here; follow cursors until the index is ready.
-        filtered = filter_threads(threads, messages, params)
-        next_link = response.get("@odata.nextLink")
-        return ListThreadsResult(
-            threads=filtered[: params.limit], next_cursor=encode_cursor(next_link) if next_link else None
-        )
+        while True:
+            response = await self._list_thread_messages_raw(account, message_params)
+            messages = self._build_thread_messages(account, response)
+            threads = build_threads_from_messages(messages, unread_from_latest=True)
+            # shortcut: search pages are filtered locally; the ready index supplies distinct thread pagination.
+            filtered = filter_threads(threads, messages, params)
+            next_link = response.get("@odata.nextLink")
+            next_cursor = encode_cursor(next_link) if next_link else None
+            if filtered or not next_cursor or not isinstance(params.in_, list):
+                return ListThreadsResult(threads=filtered[: params.limit], next_cursor=next_cursor)
+            # The inbox cannot start pagination from an empty filtered page.
+            message_params.page_token = next_cursor
 
     async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
         message_params = ListMessagesParams(thread_id=thread_id, limit=100)

@@ -936,3 +936,19 @@ async def test_multi_folder_cursor_requires_refresh_if_microsoft_progress_was_re
         )
     assert error.value.status_code == 400
     controller.registry.get_client.return_value.list_threads.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_microsoft_mixed_folder_fallback_preserves_resolved_aliases(
+    microsoft_controller: ControllerFixture, account: Account
+) -> None:
+    controller = microsoft_controller
+    controller.registry.get_client.return_value = AsyncMock()
+    params = ListThreadsParams(in_=["inbox", "custom-id"])
+
+    await controller.subject.list_threads(account, params)
+
+    controller.registry.get_client.return_value.list_threads.assert_awaited_once_with(
+        account, replace(params, in_=["custom-id", "inbox-id"])
+    )
+    controller.thread_repo.page.assert_not_awaited()
