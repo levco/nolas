@@ -106,6 +106,8 @@ class ImapProviderAdapter(ProviderClient):
         seen_ids: set[str] = set()
 
         folders = await FolderUtils.get_account_folders(self._connection_manager, account)
+        if isinstance(params.in_, list):
+            folders = [folder for folder in folders if folder in params.in_]
         for folder in folders:
             if len(messages) >= params.limit:
                 break

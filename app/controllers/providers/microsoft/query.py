@@ -25,6 +25,9 @@ def build_graph_filter(params: ListMessagesParams) -> str | None:
         clauses.append(f"receivedDateTime le {_iso(params.received_before)}")
     clauses.append("isDraft eq false")
 
+    if isinstance(params.in_, list) and params.in_:
+        folder_clauses = ["parentFolderId eq '" + folder.replace("'", "''") + "'" for folder in params.in_]
+        clauses.append("(" + " or ".join(folder_clauses) + ")")
     if params.thread_id:
         escaped = params.thread_id.replace("'", "''")
         clauses.append(f"conversationId eq '{escaped}'")

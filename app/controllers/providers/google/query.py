@@ -27,7 +27,9 @@ def build_gmail_query(params: ListMessagesParams) -> str:
         clauses.append(f"from:{params.from_}")
 
     if params.in_:
-        clauses.append(f"in:{params.in_}")
+        folders = [params.in_] if isinstance(params.in_, str) else params.in_
+        folder_query = " ".join(f"in:{folder}" for folder in folders)
+        clauses.append("{" + folder_query + "}" if len(folders) > 1 else folder_query)
 
     if params.any_email:
         ors = " ".join(f"from:{email} to:{email} cc:{email} bcc:{email}" for email in params.any_email)
@@ -66,7 +68,9 @@ def build_gmail_thread_query(params: ListThreadsParams) -> str:
     if params.bcc:
         clauses.append(f"bcc:{params.bcc}")
     if params.in_:
-        clauses.append(f"in:{params.in_}")
+        folders = [params.in_] if isinstance(params.in_, str) else params.in_
+        folder_query = " ".join(f"in:{folder}" for folder in folders)
+        clauses.append("{" + folder_query + "}" if len(folders) > 1 else folder_query)
 
     if params.any_email:
         ors = " ".join(f"from:{email} to:{email} cc:{email} bcc:{email}" for email in params.any_email)

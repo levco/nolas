@@ -338,7 +338,8 @@ class GraphClient(ProviderClient):
 
     async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
         message_params = ListMessagesParams(
-            limit=min(max(params.limit * 5, params.limit), 100),
+            # Multi-folder pages must not discard distinct threads beyond the requested limit.
+            limit=params.limit if isinstance(params.in_, list) else min(max(params.limit * 5, params.limit), 100),
             page_token=params.page_token,
             in_=params.in_,
             from_=params.from_,
@@ -352,6 +353,7 @@ class GraphClient(ProviderClient):
         response = await self._list_thread_messages_raw(account, message_params)
         messages = self._build_thread_messages(account, response)
         threads = build_threads_from_messages(messages, unread_from_latest=True)
+        # shortcut: Graph search applies folder matching here; follow cursors until the index is ready.
         filtered = filter_threads(threads, messages, params)
         next_link = response.get("@odata.nextLink")
         return ListThreadsResult(

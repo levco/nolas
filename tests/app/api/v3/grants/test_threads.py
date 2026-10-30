@@ -48,7 +48,7 @@ async def request_threads(
             "type": "http",
             "method": "GET",
             "path": f"/v3/grants/{grant_id}/threads",
-            "query_string": urlencode(query).encode(),
+            "query_string": urlencode(query, doseq=True).encode(),
             "headers": [],
         },
         AsyncMock(return_value={"type": "http.request", "body": b""}),
@@ -182,4 +182,67 @@ async def test_selection_preserves_grant_authorization(monkeypatch: pytest.Monke
     provider = Mock(list_threads=AsyncMock())
     status, body = await request_threads(provider, str(uuid.uuid4()), {"select": "id"})
     assert status == 404 and body["error"]["type"] == "grant.not_found"
+    provider.list_threads.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_multiple_folders_route_to_index_or_provider(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    monkeypatch.setattr(settings, "use_thread_index", enabled)
+    account = Account(id=1, uuid=uuid.uuid4(), provider=AccountProvider.google)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    indexed = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([], None)))
+    provider = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([], None)))
+
+    status, _ = await request_threads(
+        provider, str(account.uuid), {"any_email": "contact@example.com", "in": ["INBOX", "SENT"]}, indexed
+    )
+
+    assert status == 200
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"])
+    if enabled:
+        indexed.list_threads.assert_awaited_once_with(account, params)
+        provider.list_threads.assert_not_awaited()
+    else:
+        provider.list_threads.assert_awaited_once_with(account, params)
+        indexed.list_threads.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_multi_folder_index_cursor_requires_refresh_when_index_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "use_thread_index", False)
+    account = Account(id=1, uuid=uuid.uuid4(), provider=AccountProvider.google)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    provider = Mock(list_threads=AsyncMock())
+
+    status, _ = await request_threads(
+        provider, str(account.uuid), {"in": ["INBOX", "SENT"], "page_token": "index:page-2"}
+    )
+
+    assert status == 400
+    provider.list_threads.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_folder_array_is_canonical_and_single_folder_stays_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "use_thread_index", False)
+    account = Account(id=1, uuid=uuid.uuid4(), provider=AccountProvider.google)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    provider = Mock(list_threads=AsyncMock(return_value=ListThreadsResult([], None)))
+    status, _ = await request_threads(provider, str(account.uuid), {"in": ["SENT", "INBOX", "SENT"]})
+    assert status == 200
+    provider.list_threads.assert_awaited_with(account, ListThreadsParams(in_=["INBOX", "SENT"]))
+    status, _ = await request_threads(provider, str(account.uuid), {"in": ["INBOX", "INBOX"]})
+    assert status == 200
+    provider.list_threads.assert_awaited_with(account, ListThreadsParams(in_="INBOX"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folders", [["INBOX", " "], ["INBOX"] * 26])
+async def test_invalid_folder_arrays_never_reach_provider(monkeypatch: pytest.MonkeyPatch, folders: list[str]) -> None:
+    account = Account(id=1, uuid=uuid.uuid4(), provider=AccountProvider.google)
+    monkeypatch.setattr(threads_api, "validate_grant_access", AsyncMock(return_value=(account, None)))
+    provider = Mock(list_threads=AsyncMock())
+    status, _ = await request_threads(provider, str(account.uuid), {"in": folders})
+    assert status in {400, 422}
     provider.list_threads.assert_not_awaited()

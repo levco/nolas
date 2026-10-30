@@ -60,10 +60,11 @@ def filter_threads(threads: list[Thread], messages: list[Message], params: ListT
 
     filtered = threads
     if params.in_:
+        folders = {params.in_} if isinstance(params.in_, str) else set(params.in_)
         filtered = [
             thread
             for thread in filtered
-            if any(params.in_ in message.folders for message in message_groups.get(thread.id, []))
+            if any(folders.intersection(message.folders) for message in message_groups.get(thread.id, []))
         ]
     if params.from_:
         expected = params.from_.lower()
@@ -115,9 +116,7 @@ def filter_threads(threads: list[Thread], messages: list[Message], params: ListT
     if params.subject:
         filtered = [thread for thread in filtered if params.subject in thread.subject]
     if params.latest_message_after is not None:
-        filtered = [
-            thread for thread in filtered if thread.latest_message_received_date >= params.latest_message_after
-        ]
+        filtered = [thread for thread in filtered if thread.latest_message_received_date >= params.latest_message_after]
     if params.latest_message_before is not None:
         filtered = [
             thread for thread in filtered if thread.latest_message_received_date <= params.latest_message_before

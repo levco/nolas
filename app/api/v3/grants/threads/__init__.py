@@ -90,7 +90,9 @@ async def list_threads(
     grant_id: str = Path(..., example="a3ec500d-126b-4532-a632-7808721b3732"),
     limit: int = Query(20, ge=1, le=100),
     page_token: str | None = Query(None),
-    in_: str | None = Query(None, alias="in"),
+    in_: list[str] | None = Query(
+        None, alias="in", max_length=25, description="Folder IDs to match (OR). Repeat in for multiple folders."
+    ),
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
     cc: str | None = Query(None),
@@ -139,10 +141,14 @@ async def list_threads(
             },
         )
 
+    folders = sorted({folder.strip() for folder in in_ or []})
+    if "" in folders:
+        return create_error_response("invalid_request_error", "Folder IDs must not be empty.", 400)
+
     params = ListThreadsParams(
         limit=limit,
         page_token=page_token,
-        in_=in_,
+        in_=folders[0] if len(folders) == 1 else folders or None,
         from_=from_,
         to=to,
         cc=cc,

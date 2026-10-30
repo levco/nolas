@@ -811,3 +811,128 @@ async def test_microsoft_deleted_message_refreshes_its_original_thread(
     await controller.subject.refresh_microsoft_message(account, "deleted-message")
     controller.thread_repo.thread_ids_for_messages.assert_awaited_once_with(account.id, ["deleted-message"])
     controller.thread_repo.upsert.assert_awaited_once_with(account.id, "thread", [], provider=AccountProvider.microsoft)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
+async def test_multi_folder_contact_query_pages_ready_cache(
+    controller: ControllerFixture, account: Account, provider: AccountProvider
+) -> None:
+    account.provider = provider
+    controller.thread_repo.get_state.return_value.provider_state = MicrosoftThreadIndexProgress(
+        inbox_id="INBOX", sent_id="SENT"
+    ).model_dump()
+    controller.thread_repo.page.side_effect = [[reference("a", 300), reference("b", 200)], [reference("b", 200)]]
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"], limit=1)
+
+    first = await controller.subject.list_threads(account, params)
+    second = await controller.subject.list_threads(account, replace(params, page_token=first.next_cursor))
+
+    assert [thread.id for thread in first.threads + second.threads] == ["a", "b"]
+    assert second.next_cursor is None
+    controller.thread_repo.page.assert_awaited_with(
+        account.id, replace(params, page_token=first.next_cursor), (300, "a")
+    )
+    controller.registry.get_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [AccountProvider.google, AccountProvider.microsoft])
+@pytest.mark.parametrize("phase", [None, MailboxThreadIndexPhase.backfill, MailboxThreadIndexPhase.catchup])
+async def test_multi_folder_contact_query_uses_provider_until_ready(
+    controller: ControllerFixture, account: Account, provider: AccountProvider, phase: MailboxThreadIndexPhase | None
+) -> None:
+    account.provider = provider
+    controller.thread_repo.get_state.return_value = (
+        MailboxThreadIndexState(
+            account_id=account.id,
+            phase=phase,
+            provider_state=MicrosoftThreadIndexProgress(inbox_id="INBOX", sent_id="SENT").model_dump(),
+        )
+        if phase
+        else None
+    )
+    controller.thread_repo.has_two_month_history.return_value = True
+    provider_client = AsyncMock()
+    controller.registry.get_client.return_value = provider_client
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"])
+
+    await controller.subject.list_threads(account, params)
+
+    provider_client.list_threads.assert_awaited_once_with(account, params)
+    controller.thread_repo.page.assert_not_awaited()
+    controller.thread_repo.has_two_month_history.assert_not_awaited()
+    if phase is None:
+        controller.thread_repo.create_state.assert_awaited_once_with(account.id)
+        controller.job_repo.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_multi_folder_provider_cursor_stays_on_provider_after_index_ready(
+    controller: ControllerFixture, account: Account
+) -> None:
+    provider_client = AsyncMock()
+    controller.registry.get_client.return_value = provider_client
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"], page_token="provider-page-2")
+
+    await controller.subject.list_threads(account, params)
+    provider_client.list_threads.assert_awaited_once_with(account, params)
+    controller.thread_repo.page.assert_not_awaited()
+
+    controller.thread_repo.page.return_value = []
+    await controller.subject.list_threads(account, replace(params, page_token=None))
+    controller.thread_repo.page.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["email", "native_search", "rebuild"])
+async def test_multi_folder_index_cursor_requires_same_email_and_ready_index(
+    controller: ControllerFixture, account: Account, change: str
+) -> None:
+    controller.thread_repo.page.return_value = [reference("a", 300), reference("b", 200)]
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"], limit=1)
+    first = await controller.subject.list_threads(account, params)
+    params = replace(params, page_token=first.next_cursor)
+    if change == "email":
+        params = replace(params, any_email=["other@example.com"])
+    elif change == "native_search":
+        params = replace(params, search_query_native="subject:report")
+    else:
+        controller.thread_repo.get_state.return_value.phase = MailboxThreadIndexPhase.backfill
+
+    with pytest.raises(ProviderError) as error:
+        await controller.subject.list_threads(account, params)
+    assert error.value.status_code == 400
+    controller.registry.get_client.return_value.list_threads.assert_not_called()
+    assert controller.thread_repo.page.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_folder_microsoft_aliases_and_order_share_cursor(
+    microsoft_controller: ControllerFixture, account: Account
+) -> None:
+    controller = microsoft_controller
+    controller.thread_repo.page.side_effect = [[reference("a", 300), reference("b", 200)], [reference("b", 200)]]
+    first = await controller.subject.list_threads(
+        account, ListThreadsParams(in_=["sent", "inbox", "sentitems"], limit=1)
+    )
+    await controller.subject.list_threads(
+        account, ListThreadsParams(in_=["inbox-id", "sent-id"], limit=1, page_token=first.next_cursor)
+    )
+    assert controller.thread_repo.page.await_args_list[0].args[1].in_ == ["inbox-id", "sent-id"]
+    assert controller.thread_repo.page.await_args_list[1].args[-1] == (300, "a")
+    controller.registry.get_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multi_folder_cursor_requires_refresh_if_microsoft_progress_was_reset(
+    microsoft_controller: ControllerFixture, account: Account
+) -> None:
+    controller = microsoft_controller
+    controller.thread_repo.get_state.return_value.provider_state = None
+    with pytest.raises(ProviderError) as error:
+        await controller.subject.list_threads(
+            account, ListThreadsParams(in_=["inbox-id", "sent-id"], page_token="index:old")
+        )
+    assert error.value.status_code == 400
+    controller.registry.get_client.return_value.list_threads.assert_not_called()
