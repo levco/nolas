@@ -455,3 +455,20 @@ def test_multi_folder_search_skips_empty_filtered_pages(has_match: bool) -> None
     assert [thread.id for thread in result.threads] == (["inbox"] if has_match else [])
     assert result.next_cursor is None
     assert http.request.await_args_list[1].args[2] == next_link
+
+
+@pytest.mark.parametrize("pages", [["page-2", "page-2"], ["page-2", "page-3", "page-2"]])
+def test_multi_folder_search_rejects_repeated_empty_page_tokens(pages: list[str]) -> None:
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[{"value": [], "@odata.nextLink": f"https://graph.microsoft.com/{page}"} for page in pages]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    params = ListThreadsParams(in_=["inbox-id", "sent-id"], any_email=["contact@example.com"])
+
+    with pytest.raises(ProviderError, match="repeated thread page"):
+        asyncio.run(client.list_threads(account, params))
+
+    assert http.request.await_count == len(pages)

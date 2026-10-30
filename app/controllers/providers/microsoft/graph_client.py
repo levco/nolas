@@ -350,6 +350,7 @@ class GraphClient(ProviderClient):
             unread=params.unread,
             search_query_native=params.search_query_native,
         )
+        seen: set[str] = set()
         while True:
             response = await self._list_thread_messages_raw(account, message_params)
             messages = self._build_thread_messages(account, response)
@@ -360,6 +361,9 @@ class GraphClient(ProviderClient):
             next_cursor = encode_cursor(next_link) if next_link else None
             if filtered or not next_cursor or not isinstance(params.in_, list):
                 return ListThreadsResult(threads=filtered[: params.limit], next_cursor=next_cursor)
+            if next_cursor in seen:
+                raise ProviderError("Microsoft returned a repeated thread page token.")
+            seen.add(next_cursor)
             # The inbox cannot start pagination from an empty filtered page.
             message_params.page_token = next_cursor
 
