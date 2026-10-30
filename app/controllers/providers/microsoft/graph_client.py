@@ -338,7 +338,8 @@ class GraphClient(ProviderClient):
 
     async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
         message_params = ListMessagesParams(
-            limit=min(max(params.limit * 5, params.limit), 100),
+            # Multi-folder pages must not discard distinct threads beyond the requested limit.
+            limit=params.limit if isinstance(params.in_, list) else min(max(params.limit * 5, params.limit), 100),
             page_token=params.page_token,
             in_=params.in_,
             from_=params.from_,
@@ -349,14 +350,22 @@ class GraphClient(ProviderClient):
             unread=params.unread,
             search_query_native=params.search_query_native,
         )
-        response = await self._list_thread_messages_raw(account, message_params)
-        messages = self._build_thread_messages(account, response)
-        threads = build_threads_from_messages(messages, unread_from_latest=True)
-        filtered = filter_threads(threads, messages, params)
-        next_link = response.get("@odata.nextLink")
-        return ListThreadsResult(
-            threads=filtered[: params.limit], next_cursor=encode_cursor(next_link) if next_link else None
-        )
+        seen: set[str] = set()
+        while True:
+            response = await self._list_thread_messages_raw(account, message_params)
+            messages = self._build_thread_messages(account, response)
+            threads = build_threads_from_messages(messages, unread_from_latest=True)
+            # shortcut: search pages are filtered locally; the ready index supplies distinct thread pagination.
+            filtered = filter_threads(threads, messages, params)
+            next_link = response.get("@odata.nextLink")
+            next_cursor = encode_cursor(next_link) if next_link else None
+            if filtered or not next_cursor or not isinstance(params.in_, list):
+                return ListThreadsResult(threads=filtered[: params.limit], next_cursor=next_cursor)
+            if next_cursor in seen:
+                raise ProviderError("Microsoft returned a repeated thread page token.")
+            seen.add(next_cursor)
+            # The inbox cannot start pagination from an empty filtered page.
+            message_params.page_token = next_cursor
 
     async def get_thread(self, account: Account, thread_id: str) -> Thread | None:
         message_params = ListMessagesParams(thread_id=thread_id, limit=100)

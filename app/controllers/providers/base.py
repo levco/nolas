@@ -21,7 +21,7 @@ class ListMessagesParams:
     limit: int = 50
     page_token: str | None = None
     thread_id: str | None = None
-    in_: str | None = None
+    in_: str | list[str] | None = None
     from_: str | None = None
     any_email: list[str] = field(default_factory=list)
     subject: str | None = None
@@ -45,7 +45,7 @@ class ListThreadsParams:
 
     limit: int = 20
     page_token: str | None = None
-    in_: str | None = None
+    in_: str | list[str] | None = None
     from_: str | None = None
     to: str | None = None
     cc: str | None = None

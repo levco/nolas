@@ -73,11 +73,14 @@ class MailboxThreadController:
         return sorted(thread_ids)
 
     async def list_threads(self, account: Account, params: ListThreadsParams) -> ListThreadsResult:
+        folders = [params.in_] if isinstance(params.in_, str) else sorted(set(params.in_ or []))
+        multiple_folders = len(folders) > 1
+        params = replace(params, in_=folders if multiple_folders else folders[0] if folders else None)
         if (
             account.provider not in {AccountProvider.google, AccountProvider.microsoft}
             or params.search_query_native
-            or not params.in_
-            or (account.provider == AccountProvider.google and params.in_ not in {"INBOX", "SENT"})
+            or not folders
+            or (account.provider == AccountProvider.google and not set(folders) <= {"INBOX", "SENT"})
         ):
             return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
         state = await self._thread_repo.get_state(account.id)
@@ -85,12 +88,11 @@ class MailboxThreadController:
             if not state.provider_state:
                 return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
             progress = MicrosoftThreadIndexProgress.model_validate(state.provider_state)
-            folder = {"inbox": progress.inbox_id, "sent": progress.sent_id, "sentitems": progress.sent_id}.get(
-                params.in_.lower(), params.in_
-            )
-            if folder not in {progress.inbox_id, progress.sent_id}:
+            aliases = {"inbox": progress.inbox_id, "sent": progress.sent_id, "sentitems": progress.sent_id}
+            folders = sorted({aliases.get(folder.lower(), folder) for folder in folders})
+            params = replace(params, in_=folders if len(folders) > 1 else folders[0])
+            if not set(folders) <= {progress.inbox_id, progress.sent_id}:
                 return await self._registry.get_client(account).list_threads(account, self.provider_params(params))
-            params = replace(params, in_=folder)
         if state is None:
             if await self._thread_repo.create_state(account.id):
                 await self._enqueue(account.id)
@@ -99,7 +101,7 @@ class MailboxThreadController:
             or (params.page_token and not params.page_token.startswith(INDEX_CURSOR_PREFIX))
             or (
                 state.phase != MailboxThreadIndexPhase.ready
-                and not await self._thread_repo.has_two_month_history(account.id)
+                and (multiple_folders or not await self._thread_repo.has_two_month_history(account.id))
             )
         ):
             # shortcut: provider pagination keeps its old ordering limits until a refresh uses the index.
@@ -134,6 +136,10 @@ class MailboxThreadController:
     @staticmethod
     def provider_params(params: ListThreadsParams) -> ListThreadsParams:
         if params.page_token and params.page_token.startswith(INDEX_CURSOR_PREFIX):
+            if isinstance(params.in_, list):
+                raise ProviderError(
+                    "Thread index is unavailable for this query. Refresh the email list.", status_code=400
+                )
             return replace(params, page_token=None)
         return params
 

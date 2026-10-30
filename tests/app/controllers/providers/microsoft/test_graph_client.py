@@ -378,3 +378,97 @@ def test_sequential_batch_rejects_retry_without_progress() -> None:
         asyncio.run(client._mark_messages_read(account, ["message-1"]))
 
     assert http.request.await_count == 1
+
+
+@pytest.mark.parametrize("with_contact", [False, True])
+def test_multi_folder_pages_keep_every_matching_thread_and_provider_cursor(with_contact: bool) -> None:
+    from dataclasses import replace
+    from app.controllers.providers.microsoft.query import decode_cursor
+
+    def raw(identifier: str, folder: str) -> dict[str, object]:
+        return {
+            **_raw_graph_message(identifier, identifier, is_read=True),
+            "parentFolderId": folder,
+            "from": {"emailAddress": {"address": "contact@example.com"}},
+        }
+
+    next_link = "https://graph.microsoft.com/v1.0/me/messages?$skip=2"
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[
+                {
+                    "value": [raw("inbox-thread", "inbox-id"), raw("sent-thread", "sent-id")],
+                    "@odata.nextLink": next_link,
+                },
+                {"value": [raw("another-thread", "sent-id"), raw("archive-thread", "archive-id")]},
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    params = ListThreadsParams(
+        in_=["inbox-id", "sent-id"], any_email=["contact@example.com"] if with_contact else [], limit=2
+    )
+    first = asyncio.run(client.list_threads(account, params))
+    second = asyncio.run(client.list_threads(account, replace(params, page_token=first.next_cursor)))
+
+    assert [thread.id for thread in first.threads + second.threads] == ["inbox-thread", "sent-thread", "another-thread"]
+    assert first.next_cursor and decode_cursor(first.next_cursor) == next_link
+    assert second.next_cursor is None
+    first_request, second_request = http.request.await_args_list
+    query = first_request.kwargs["params"]
+    assert query["$top"] == 2
+    if with_contact:
+        assert query["$search"] == '"participants:contact@example.com"'
+    else:
+        assert "(parentFolderId eq 'inbox-id' or parentFolderId eq 'sent-id')" in query["$filter"]
+    assert second_request.args[2] == next_link
+
+
+@pytest.mark.parametrize("has_match", [True, False])
+def test_multi_folder_search_skips_empty_filtered_pages(has_match: bool) -> None:
+    next_link = "https://graph.microsoft.com/v1.0/me/messages?$skip=1"
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[
+                {
+                    "value": [
+                        {**_raw_graph_message("archive", "archive", is_read=True), "parentFolderId": "archive-id"}
+                    ],
+                    "@odata.nextLink": next_link,
+                },
+                {
+                    "value": (
+                        [{**_raw_graph_message("inbox", "inbox", is_read=True), "parentFolderId": "inbox-id"}]
+                        if has_match
+                        else []
+                    ),
+                },
+            ]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    params = ListThreadsParams(in_=["inbox-id", "sent-id"], search_query_native="subject:report", limit=1)
+
+    result = asyncio.run(client.list_threads(account, params))
+    assert [thread.id for thread in result.threads] == (["inbox"] if has_match else [])
+    assert result.next_cursor is None
+    assert http.request.await_args_list[1].args[2] == next_link
+
+
+@pytest.mark.parametrize("pages", [["page-2", "page-2"], ["page-2", "page-3", "page-2"]])
+def test_multi_folder_search_rejects_repeated_empty_page_tokens(pages: list[str]) -> None:
+    http = Mock(
+        request=AsyncMock(
+            side_effect=[{"value": [], "@odata.nextLink": f"https://graph.microsoft.com/{page}"} for page in pages]
+        )
+    )
+    client = GraphClient(http)
+    account = Mock(uuid=uuid.uuid4())
+    params = ListThreadsParams(in_=["inbox-id", "sent-id"], any_email=["contact@example.com"])
+
+    with pytest.raises(ProviderError, match="repeated thread page"):
+        asyncio.run(client.list_threads(account, params))
+
+    assert http.request.await_count == len(pages)

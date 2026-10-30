@@ -77,3 +77,15 @@ class TestBuildGmailThreadQuery:
         for email in ("a@x.com", "b@y.com"):
             for field in ("from", "to", "cc", "bcc"):
                 assert f"{field}:{email}" in query
+
+
+def test_thread_folder_array_is_an_or_group_combined_with_contact_filter() -> None:
+    query = build_gmail_thread_query(ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"]))
+    assert (
+        query
+        == "{in:INBOX in:SENT} {from:contact@example.com to:contact@example.com cc:contact@example.com bcc:contact@example.com} -in:draft"
+    )
+
+
+def test_message_query_accepts_internal_folder_array() -> None:
+    assert build_gmail_query(ListMessagesParams(in_=["INBOX", "SENT"])) == "{in:INBOX in:SENT} -in:draft"

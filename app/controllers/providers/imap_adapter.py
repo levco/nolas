@@ -105,10 +105,11 @@ class ImapProviderAdapter(ProviderClient):
         messages: list[Message] = []
         seen_ids: set[str] = set()
 
-        folders = await FolderUtils.get_account_folders(self._connection_manager, account)
+        folders = [params.in_] if isinstance(params.in_, str) else params.in_
+        if not folders:
+            folders = await FolderUtils.get_account_folders(self._connection_manager, account)
         for folder in folders:
-            if len(messages) >= params.limit:
-                break
+            folder_message_count = 0
             connection = None
             try:
                 connection = await self._connection_manager.get_connection_or_fail(account, folder)
@@ -122,7 +123,7 @@ class ImapProviderAdapter(ProviderClient):
                 # Newest first, dedupe, cap.
                 unique_uids = sorted({int(uid) for uid in uids}, reverse=True)[:MAX_UIDS_PER_FOLDER]
                 for uid in unique_uids:
-                    if len(messages) >= params.limit:
+                    if folder_message_count >= params.limit:
                         break
                     fetch_result = await connection.fetch(str(uid), "(RFC822)")  # type: ignore[attr-defined]
                     raw_message = self._extract_raw(fetch_result)
@@ -138,6 +139,7 @@ class ImapProviderAdapter(ProviderClient):
                         continue
                     seen_ids.add(message.id)
                     messages.append(message)
+                    folder_message_count += 1
             except Exception:
                 logger.exception(f"IMAP list_messages failed for {account.email}:{folder}")
             finally:

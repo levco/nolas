@@ -233,3 +233,21 @@ def test_phase_enum_reads_existing_strings_and_writes_to_the_original_schema(
     columns = sa.inspect(session.connection()).get_columns("mailbox_thread_index_states")
     phase_type = next(column["type"] for column in columns if column["name"] == "phase")
     assert isinstance(phase_type, sa.String) and phase_type.length == 50
+
+
+def test_folder_union_filters_before_paging_without_duplicates(session: Session) -> None:
+    session.execute(
+        sa.insert(MailboxThread),
+        [
+            {**row("inbox-only", 500), "folders": ["INBOX"]},
+            {**row("sent-only", 400), "folders": ["SENT"]},
+            row("both-folders", 300),
+            {**row("archive", 600), "folders": ["ARCHIVE"]},
+            {**row("other-contact", 700), "participants": ["other@example.com"]},
+            row("other-account", 800, 2),
+        ],
+    )
+    params = ListThreadsParams(in_=["INBOX", "SENT"], any_email=["contact@example.com"], limit=2)
+    first = list(session.scalars(MailboxThreadRepo.page_query(1, params)))
+    second = list(session.scalars(MailboxThreadRepo.page_query(1, params, (400, "sent-only"))))
+    assert [thread.thread_id for thread in first[:2] + second] == ["inbox-only", "sent-only", "both-folders"]

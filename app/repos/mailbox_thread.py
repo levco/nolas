@@ -121,7 +121,8 @@ class MailboxThreadRepo(BaseRepo[MailboxThread]):
     ) -> sa.Select[tuple[MailboxThread]]:
         stmt = sa.select(MailboxThread).where(MailboxThread.account_id == account_id)
         if params.in_:
-            stmt = stmt.where(MailboxThread.folders.contains([params.in_]))
+            folders = [params.in_] if isinstance(params.in_, str) else params.in_
+            stmt = stmt.where(MailboxThread.folders.overlap(folders))
         for value, column in (
             (params.from_, MailboxThread.senders),
             (params.to, MailboxThread.recipients),
