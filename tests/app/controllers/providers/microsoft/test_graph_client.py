@@ -37,8 +37,19 @@ def test_list_threads_requests_newest_messages_first() -> None:
     assert query["$filter"] == "receivedDateTime ge 1900-01-01T00:00:00Z and isDraft eq false"
 
 
-@pytest.mark.parametrize("native_query", ["matt", "subject:invoice", "from:matt@example.com"])
-def test_list_threads_routes_mailbox_text_to_search(native_query: str) -> None:
+@pytest.mark.parametrize(
+    "native_query",
+    [
+        "matt",
+        "subject:invoice",
+        "from:matt@example.com",
+        "hanmi.com",
+        '"hanmi.com"',
+        '"term sheet"',
+        '"subject:\\"term sheet\\""',
+    ],
+)
+def test_list_threads_preserves_caller_native_search(native_query: str) -> None:
     http = SimpleNamespace(request=AsyncMock(return_value={"value": []}))
     client = GraphClient(http)
     account = SimpleNamespace(uuid=uuid.uuid4(), email="owner@example.com")
@@ -46,7 +57,7 @@ def test_list_threads_routes_mailbox_text_to_search(native_query: str) -> None:
     asyncio.run(client.list_threads(account, ListThreadsParams(search_query_native=native_query)))
 
     query = http.request.await_args.kwargs["params"]
-    assert query["$search"] == f'"{native_query}"'
+    assert query["$search"] == native_query
     assert "$filter" not in query
     assert "$orderby" not in query
 

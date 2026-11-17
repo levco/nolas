@@ -446,7 +446,7 @@ class GraphClient(ProviderClient):
         if search:
             # $search cannot be combined with $filter/$orderby. Graph returns
             # message search results newest-first by received date.
-            query["$search"] = f'"{search}"'
+            query["$search"] = native_query or f'"{search}"'
         else:
             graph_filter = build_graph_filter(params)
             if graph_filter:
