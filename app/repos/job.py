@@ -7,6 +7,9 @@ from sqlalchemy import update
 from app.models.job import Job, JobStatus, JobType
 from app.repos.base import BaseRepo
 
+# Provider rate limits do not use the failure budget, but they cannot retry forever.
+MAX_RATE_LIMIT_RETRIES = 10
+
 
 class JobRepo(BaseRepo[Job]):
     """Repository for durable background jobs."""
@@ -32,6 +35,19 @@ class JobRepo(BaseRepo[Job]):
         )
         await self.add(job)
         return job
+
+    async def get_pending_google_notification(self, email_address: str) -> Job | None:
+        stmt = (
+            self.base_stmt.where(
+                Job.type == JobType.google_notification,
+                Job.status == JobStatus.pending,
+                Job.payload["email_address"].astext == email_address,
+            )
+            .order_by(Job.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        return (await self.execute(stmt)).first()
 
     async def claim_batch(self, worker_id: str, limit: int) -> list[Job]:
         claimable = (
@@ -68,16 +84,18 @@ class JobRepo(BaseRepo[Job]):
         await self.flush()
 
     async def mark_retry_or_failed(
-        self, job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool = True
+        self, job: Job, error: str, retry_delay_seconds: int, *, rate_limited: bool = False
     ) -> None:
-        if count_attempt:
+        if rate_limited:
+            job.rate_limit_retries += 1
+        else:
             job.attempts += 1
         job.last_error = error[:4000]
         job.completed_at = None
         job.locked_at = None
         job.locked_by = None
 
-        if count_attempt and job.attempts >= job.max_attempts:
+        if job.attempts >= job.max_attempts or job.rate_limit_retries >= MAX_RATE_LIMIT_RETRIES:
             job.status = JobStatus.failed
             await self.flush()
             return

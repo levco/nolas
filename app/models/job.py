@@ -41,6 +41,9 @@ class Job(Base, TimestampMixin):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB(), nullable=False, server_default=sa.text("'{}'"))
     attempts: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
     max_attempts: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("5"))
+    rate_limit_retries: Mapped[int] = mapped_column(
+        sa.Integer(), nullable=False, default=0, server_default=sa.text("0")
+    )
     available_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, index=True, server_default=sa.func.now()
     )

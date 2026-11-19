@@ -1,4 +1,5 @@
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,9 @@ from app.repos.job import JobRepo
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
+RATE_LIMIT_BASE_DELAY_SECONDS = 300
+RATE_LIMIT_MAX_DELAY_SECONDS = 3600
 
 
 class JobProcessorController:
@@ -55,6 +59,16 @@ class JobProcessorController:
         if not any(account.status == AccountStatus.active for account in accounts):
             logger.info(f"Skipping Google notification enqueue: no active account for {normalized_email}")
             return None
+        # Each job reads all history from the account cursor, so one pending job per mailbox is enough.
+        # Keep its available_at so a rate-limit backoff stays in place.
+        pending = await self._job_repo.get_pending_google_notification(normalized_email)
+        if pending is not None:
+            current = str(pending.payload.get("history_id", ""))
+            # Pub/Sub can deliver out of order; never move the pending job back to an older history id.
+            if not (current.isdigit() and history_id.isdigit() and int(current) > int(history_id)):
+                pending.payload = {**pending.payload, "history_id": history_id}
+                await self._job_repo.flush()
+            return pending
         payload = GoogleNotificationJobPayload(email_address=normalized_email, history_id=history_id)
         return await self._job_repo.enqueue(JobType.google_notification, payload.model_dump())
 
@@ -122,18 +136,21 @@ class JobProcessorController:
                 await self._dispatch(job)
         except Exception as exc:
             rate_limited = isinstance(exc, ProviderRateLimitError)
-            retry_delay = self._retry_delay_seconds(job.attempts + 1)
             if isinstance(exc, ProviderRateLimitError):
-                retry_delay = max(300, exc.retry_after_seconds or 0)
+                retry_delay = self._rate_limit_delay_seconds(job.rate_limit_retries + 1, exc.retry_after_seconds)
+            else:
+                retry_delay = self._retry_delay_seconds(job.attempts + 1)
             await self._job_repo.mark_retry_or_failed(
-                job, str(exc), retry_delay_seconds=retry_delay, count_attempt=not rate_limited
+                job, str(exc), retry_delay_seconds=retry_delay, rate_limited=rate_limited
             )
             logger.warning(
-                "Job %s (%s) error (counted failures %s/%s; retry delay %ss): %s",
+                "Job %s (%s) error (counted failures %s/%s; rate-limit retries %s; status %s; retry delay %ss): %s",
                 job.id,
                 job.type.name,
                 job.attempts,
                 job.max_attempts,
+                job.rate_limit_retries,
+                job.status.name,
                 retry_delay,
                 exc,
                 exc_info=True,
@@ -221,3 +238,10 @@ class JobProcessorController:
     def _retry_delay_seconds(failure_count: int) -> int:
         # 5s, 10s, 20s, ... with a 5-minute ceiling.
         return min(300, max(5, 5 * (2 ** (failure_count - 1))))  # type: ignore
+
+    @staticmethod
+    def _rate_limit_delay_seconds(retry_count: int, retry_after_seconds: int | None) -> int:
+        # Ceiling doubles from 5 minutes to 1 hour; jitter spreads retries across the upper half.
+        ceiling = min(RATE_LIMIT_MAX_DELAY_SECONDS, RATE_LIMIT_BASE_DELAY_SECONDS * 2 ** (retry_count - 1))
+        delay = random.randint(ceiling // 2, ceiling)
+        return max(RATE_LIMIT_BASE_DELAY_SECONDS, delay, retry_after_seconds or 0)

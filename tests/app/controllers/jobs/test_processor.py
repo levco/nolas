@@ -9,7 +9,7 @@ from app.controllers.jobs.processor import JobProcessorController
 from app.controllers.providers.exceptions import ProviderRateLimitError
 from app.models.account import AccountProvider, AccountStatus
 from app.models.job import Job, JobStatus, JobType
-from app.repos.job import JobRepo
+from app.repos.job import MAX_RATE_LIMIT_RETRIES, JobRepo
 from settings import settings
 
 
@@ -46,11 +46,12 @@ class TestJobProcessorController:
             payload={"account_id": 7},
             attempts=0,
             max_attempts=5,
+            rate_limit_retries=0,
         )
         with patch.object(controller, "_dispatch", AsyncMock(side_effect=error)):
             await controller._process_one(job)
         job_repo.mark_retry_or_failed.assert_awaited_once_with(
-            job, str(error), retry_delay_seconds=delay, count_attempt=False
+            job, str(error), retry_delay_seconds=delay, rate_limited=True
         )
         job_repo.mark_completed.assert_not_awaited()
 
@@ -66,15 +67,17 @@ class TestJobProcessorController:
             payload={"account_id": 7},
             attempts=attempts,
             max_attempts=5,
+            rate_limit_retries=0,
             locked_by="worker",
             locked_at=now,
         )
         with patch.object(repo, "db_now", AsyncMock(return_value=now)), patch.object(repo, "flush", AsyncMock()):
-            for _ in range(7):
+            for retry in range(1, 8):
                 job.status = JobStatus.processing
                 job.locked_by, job.locked_at = "worker", now
-                await repo.mark_retry_or_failed(job, "Quota exceeded", retry_delay_seconds=300, count_attempt=False)
+                await repo.mark_retry_or_failed(job, "Quota exceeded", retry_delay_seconds=300, rate_limited=True)
                 assert job.status == JobStatus.pending
+                assert job.rate_limit_retries == retry
                 assert job.available_at == now + timedelta(minutes=5)
                 assert job.payload == {"account_id": 7} and job.attempts == attempts
                 assert job.locked_by is None and job.locked_at is None
@@ -82,6 +85,40 @@ class TestJobProcessorController:
             await repo.mark_retry_or_failed(job, "Other failure", retry_delay_seconds=5)
         assert job.attempts == attempts + 1
         assert job.status == (JobStatus.failed if attempts == 4 else JobStatus.pending)
+
+    @pytest.mark.parametrize(
+        "retry_count,jitter,expected",
+        [(1, "low", 300), (2, "low", 300), (2, "high", 600), (3, "low", 600), (5, "high", 3600), (9, "high", 3600)],
+    )
+    def test_quota_retry_delay_backs_off_with_jitter_and_cap(
+        self, retry_count: int, jitter: str, expected: int
+    ) -> None:
+        def pick(low: int, high: int) -> int:
+            return low if jitter == "low" else high
+
+        with patch("app.controllers.jobs.processor.random.randint", side_effect=pick):
+            assert JobProcessorController._rate_limit_delay_seconds(retry_count, None) == expected
+            assert JobProcessorController._rate_limit_delay_seconds(retry_count, 7200) == 7200
+
+    @pytest.mark.asyncio
+    async def test_quota_retries_fail_job_after_limit(self) -> None:
+        repo = JobRepo()
+        now = datetime(2026, 11, 19, tzinfo=timezone.utc)
+        job = Job(
+            id=1,
+            type=JobType.google_notification,
+            status=JobStatus.processing,
+            payload={"email_address": "a@b.co", "history_id": "42"},
+            attempts=0,
+            max_attempts=5,
+            rate_limit_retries=MAX_RATE_LIMIT_RETRIES - 2,
+        )
+        with patch.object(repo, "db_now", AsyncMock(return_value=now)), patch.object(repo, "flush", AsyncMock()):
+            await repo.mark_retry_or_failed(job, "Quota exceeded", retry_delay_seconds=3600, rate_limited=True)
+            assert job.status == JobStatus.pending
+            await repo.mark_retry_or_failed(job, "Quota exceeded", retry_delay_seconds=3600, rate_limited=True)
+        assert job.status == JobStatus.failed
+        assert job.attempts == 0 and job.rate_limit_retries == MAX_RATE_LIMIT_RETRIES
 
     @pytest.mark.asyncio
     async def test_quota_retry_releases_worker_to_process_the_next_job(self) -> None:
@@ -94,14 +131,15 @@ class TestJobProcessorController:
             payload={"account_id": 7},
             attempts=0,
             max_attempts=5,
+            rate_limit_retries=0,
             locked_by="worker",
             locked_at=now,
         )
         other = Job(id=2, type=JobType.google_notification, status=JobStatus.processing)
         repo = JobRepo()
 
-        async def retry(job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool) -> None:
-            await repo.mark_retry_or_failed(job, error, retry_delay_seconds, count_attempt=count_attempt)
+        async def retry(job: Job, error: str, retry_delay_seconds: int, *, rate_limited: bool) -> None:
+            await repo.mark_retry_or_failed(job, error, retry_delay_seconds, rate_limited=rate_limited)
 
         async def dispatch(job: Job) -> None:
             if job.id == limited.id:
@@ -150,8 +188,8 @@ class TestJobProcessorController:
         job_repo.requeue_stale_processing.return_value = 0
         job_repo.claim_batch.return_value = [job]
 
-        async def mark_failed(job: Job, error: str, retry_delay_seconds: int, *, count_attempt: bool) -> None:
-            assert count_attempt
+        async def mark_failed(job: Job, error: str, retry_delay_seconds: int, *, rate_limited: bool) -> None:
+            assert not rate_limited
             job.attempts += 1
             job.status = JobStatus.failed if job.attempts == job.max_attempts else JobStatus.pending
 
@@ -171,11 +209,37 @@ class TestJobProcessorController:
     async def test_enqueues_google_notification_lowercasing_email(self) -> None:
         controller, job_repo, _, _, account_repo, _ = _make_controller()
         account_repo.get_all_by_email_and_provider.return_value = [SimpleNamespace(status=AccountStatus.active)]
+        job_repo.get_pending_google_notification.return_value = None
         await controller.enqueue_google_notification("User@Example.COM", "123")
         account_repo.get_all_by_email_and_provider.assert_awaited_once_with("user@example.com", AccountProvider.google)
+        job_repo.get_pending_google_notification.assert_awaited_once_with("user@example.com")
         job_repo.enqueue.assert_awaited_once_with(
             JobType.google_notification, {"email_address": "user@example.com", "history_id": "123"}
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("current,incoming,expected", [("100", "150", "150"), ("100", "90", "100")])
+    async def test_google_notification_updates_pending_job_instead_of_enqueueing(
+        self, current: str, incoming: str, expected: str
+    ) -> None:
+        controller, job_repo, _, _, account_repo, _ = _make_controller()
+        account_repo.get_all_by_email_and_provider.return_value = [SimpleNamespace(status=AccountStatus.active)]
+        available_at = datetime(2026, 11, 19, 12, tzinfo=timezone.utc)
+        pending = Job(
+            id=3,
+            type=JobType.google_notification,
+            status=JobStatus.pending,
+            payload={"email_address": "user@example.com", "history_id": current},
+            available_at=available_at,
+        )
+        job_repo.get_pending_google_notification.return_value = pending
+
+        job = await controller.enqueue_google_notification("user@example.com", incoming)
+
+        assert job is pending
+        assert pending.payload == {"email_address": "user@example.com", "history_id": expected}
+        assert pending.available_at == available_at
+        job_repo.enqueue.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skips_google_enqueue_without_active_account(self) -> None:
@@ -311,9 +375,11 @@ class TestJobProcessorController:
             SimpleNamespace(
                 id=12,
                 type=JobType.google_notification,
+                status=JobStatus.processing,
                 payload={"email_address": "a@b.co", "history_id": "42"},
                 attempts=0,
                 max_attempts=5,
+                rate_limit_retries=0,
             ),
         )
         job_repo.requeue_stale_processing.return_value = 0
@@ -325,7 +391,7 @@ class TestJobProcessorController:
         assert processed == 1
         job_repo.mark_completed.assert_not_awaited()
         job_repo.mark_retry_or_failed.assert_awaited_once()
-        assert job_repo.mark_retry_or_failed.await_args.kwargs["count_attempt"] is True
+        assert job_repo.mark_retry_or_failed.await_args.kwargs["rate_limited"] is False
 
     @pytest.mark.asyncio
     async def test_processes_subscription_renewal_with_app_preloaded(self) -> None:
